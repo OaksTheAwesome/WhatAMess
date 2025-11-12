@@ -5,13 +5,22 @@
 
 static BOOL isEnabled;
 
-%hook CKConversationListCollectionViewController
+BOOL isTweakEnabled() {
+	if (isEnabled) {
+		return isEnabled;
+	}
 
--(void) viewDidLoad {
 	NSUserDefaults *bundleDefaults = [[NSUserDefaults alloc] initWithSuiteName:@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs"];
 	isEnabled = [bundleDefaults objectForKey:@"isEnabled"] ? [bundleDefaults boolForKey:@"isEnabled"] : YES;
 
-	if (!isEnabled) {
+	return isEnabled;
+
+}
+
+%hook CKConversationListCollectionViewController
+
+-(void) viewDidLoad {
+	if (!isTweakEnabled()) {
 		%orig;
 		return;
 	}
@@ -25,3 +34,26 @@ static BOOL isEnabled;
 }
 
 %end
+
+@interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
+@end
+
+%hook CKConversationListCollectionViewConversationCell
+
+-(instancetype)initWithFrame:(CGRect)frame {
+	if (!isTweakEnabled()) {
+		return %orig(frame);
+	}
+
+	self = %orig(frame);
+	if (self) {
+		self.contentView.backgroundColor = [UIColor redColor];
+	}
+	return self;
+}
+
+
+%end
+
+
+

@@ -17,14 +17,11 @@ static BOOL isEnabled;
 	}
 
 	%orig;
-	UIView *convlistView = [[UIView alloc] init];
+	UIView *convlistView = [[UIView alloc] initWithFrame:self.collectionView.bounds];
 	convlistView.backgroundColor = [UIColor blueColor];
-	convlistView.translatesAutoresizingMaskIntoConstraints = false;
-	[self.view addSubview:convlistView];
-
-	[convlistView.topAnchor constraintEqualToAnchor: self.view.topAnchor].active = true;
-	[convlistView.widthAnchor constraintEqualToConstant:100].active = YES;
-	[convlistView.heightAnchor constraintEqualToConstant:100].active = YES;
+	convlistView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+	
+	self.collectionView.backgroundView = convlistView;
 }
 
 %end

@@ -1,63 +1,80 @@
 #import <UIKit/UIKit.h>
 
 @interface CKConversationListCollectionViewController : UICollectionViewController
+-(void)updateBackground;
 @end
 
-static BOOL isEnabled;
+#define kPrefsPath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
+#define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
+#define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 
 BOOL isTweakEnabled() {
-	if (isEnabled) {
-		return isEnabled;
-	}
-
-	NSUserDefaults *bundleDefaults = [[NSUserDefaults alloc] initWithSuiteName:@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs"];
-	isEnabled = [bundleDefaults objectForKey:@"isEnabled"] ? [bundleDefaults boolForKey:@"isEnabled"] : YES;
-
-	return isEnabled;
-
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	return prefs[@"isEnabled"] ? [prefs[@"isEnabled"] boolValue] : YES;
 }
 
 BOOL isConvColorBgEnabled() {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs"];
-    return [prefs objectForKey:@"isConvColorBgEnabled"] ? [prefs boolForKey:@"isConvColorBgEnabled"] : YES;
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	return prefs[@"isConvColorBgEnabled"] ? [prefs[@"isConvColorBgEnabled"] boolValue] : YES;
 }
 
 BOOL isConvImageBgEnabled() {
-    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs"];
-    return [prefs objectForKey:@"isConvImageBgEnabled"] ? [prefs boolForKey:@"isConvImageBgEnabled"] : NO;
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
 }
 
 %hook CKConversationListCollectionViewController
 
 -(void) viewDidLoad {
+	%orig;
+
 	if (!isTweakEnabled()) {
-		%orig;
 		return;
 	}
-
-	%orig;
 
 	self.view.backgroundColor = [UIColor clearColor];
 	self.collectionView.backgroundColor = [UIColor clearColor];
 
-	NSString *imagePath = @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg";
-	BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:imagePath];
+	[self updateBackground];
 
-	for (UIView *sub in self.view.subviews) {
-		if (sub.tag == 999) [sub removeFromSuperview];
-	}
-
-	UIView *convlistView = nil;
-	
-		else if (isConvColorBgEnabled()) {
-			UIView *convlistView = [[UIView alloc] initWithFrame:self.collectionView.bounds];
-			convlistView.backgroundColor = [UIColor blueColor];
-			convlistView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-	
-			self.collectionView.backgroundView = convlistView;
-		}
-	
+	[[NSNotificationCenter defaultCenter] addObserver:self
+		selector:@selector(updateBackground)
+		name:kPrefsChangedNotification
+		object:nil];
 }
+
+%new
+-(void)updateBackground {
+	BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kImagePath];
+	UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kImagePath] : nil;
+	
+	// Color overrides image
+	if (isConvColorBgEnabled()) {
+		UIView *colorView = [[UIView alloc] initWithFrame:self.collectionView.bounds];
+		colorView.backgroundColor = [UIColor blueColor];
+		colorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		
+		self.collectionView.backgroundView = colorView;
+	} else if (bgImage && isConvImageBgEnabled()) {
+		UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.collectionView.bounds];
+		imageView.image = bgImage;
+		imageView.contentMode = UIViewContentModeScaleAspectFill;
+		imageView.clipsToBounds = YES;
+		imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		
+		self.collectionView.backgroundView = imageView;
+	} else {
+		self.collectionView.backgroundView = nil;
+	}
+	
+	[self.collectionView reloadData];
+}
+
+-(void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	%orig;
+}
+
 %end
 
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
@@ -69,15 +86,15 @@ BOOL isConvImageBgEnabled() {
 	if (!isTweakEnabled()) {
 		return %orig(frame);
 	}
-
 	self = %orig(frame);
 	if (self) {
-		if (isConvImageBgEnabled()) {
+		// Color overrides image
+		if (isConvColorBgEnabled()) {
+			self.contentView.backgroundColor = [UIColor redColor];
+		} else if (isConvImageBgEnabled()) {
 			self.backgroundColor = [UIColor clearColor];
 			self.contentView.backgroundColor = [UIColor clearColor];
 			self.layer.backgroundColor = [UIColor clearColor].CGColor;
-		} else if (isConvColorBgEnabled()) {
-			self.contentView.backgroundColor = [UIColor redColor];
 		}
 	}
 	return self;
@@ -85,6 +102,3 @@ BOOL isConvImageBgEnabled() {
 
 
 %end
-
-
-

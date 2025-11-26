@@ -11,6 +11,16 @@
 	return _specifiers;
 }
 
+-(void)viewWillDisappear:(BOOL)animated {
+	[super viewWillDisappear:animated];
+
+	CFNotificationCenterPostNotification(
+		CFNotificationCenterGetDarwinNotifyCenter(),
+		CFSTR("com.oakstheawesome.whatamessprefs/prefsChanged"),
+		NULL, NULL, YES
+	);
+}
+
 //Image picker junk, this sucked to make and I had to use some ChatGPT :(
 - (void)pickConvListBgImage {
     UIImagePickerController *picker = [[UIImagePickerController alloc] init];
@@ -31,7 +41,7 @@
 		return;
 	}
 
-NSString *dirPath = @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamess";
+    NSString *dirPath = @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs";
     if (![[NSFileManager defaultManager] fileExistsAtPath:dirPath]) {
         [[NSFileManager defaultManager] createDirectoryAtPath:dirPath
         withIntermediateDirectories:YES attributes:nil error:nil];
@@ -42,6 +52,12 @@ NSString *dirPath = @"/var/mobile/Library/Preferences/com.oakstheawesome.whatame
     [data writeToFile:path atomically:YES];
 
     [picker dismissViewControllerAnimated:YES completion:nil];
+
+	CFNotificationCenterPostNotification(
+		CFNotificationCenterGetDarwinNotifyCenter(),
+		CFSTR("com.oakstheawesome.whatamessprefs/prefsChanged"),
+		NULL, NULL, YES
+	);
 }
 
 - (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {

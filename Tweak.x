@@ -3,14 +3,7 @@
 @interface CKConversationListCollectionViewController : UICollectionViewController
 -(void)updateBackground;
 -(void)makeSubviewsTransparent:(UIView *)view;
-@end
-
-@interface CKConversationListCollectionViewController (CustomColors)
 - (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
-@end
-
-@interface UIView (Private)
-- (UIViewController *)_viewControllerForAncestor;
 @end
 
 @interface CKLabel : UILabel
@@ -29,8 +22,17 @@
 #define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 
+static NSDictionary *cachedPrefs = nil;
+
 static NSDictionary *loadPrefs() {
-	return [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	if (!cachedPrefs) {
+		cachedPrefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	}
+	return cachedPrefs;
+}
+
+static void clearPrefsCache() {
+	cachedPrefs = nil;
 }
 
 BOOL isTweakEnabled() {
@@ -207,9 +209,10 @@ void applyCustomTextColors(UIView *view) {
 	[self applyCustomColorsToCKLabelsInView:self.view];
 }
 
-
 %new
 -(void)updateBackground {
+	clearPrefsCache();
+
 	BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kImagePath];
 	UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kImagePath] : nil;
 	

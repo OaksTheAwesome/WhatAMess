@@ -5,9 +5,33 @@
 -(void)makeSubviewsTransparent:(UIView *)view;
 @end
 
+@interface CKConversationListCollectionViewController (CustomColors)
+- (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
+@end
+
+@interface UIView (Private)
+- (UIViewController *)_viewControllerForAncestor;
+@end
+
+@interface CKLabel : UILabel
+@end
+
+@interface UIDateLabel : UILabel
+@end
+
+@interface CKDateLabel : UIDateLabel
+@end
+
+@interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
+@end
+
 #define kPrefsPath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
+
+static NSDictionary *loadPrefs() {
+	return [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+}
 
 BOOL isTweakEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
@@ -22,6 +46,119 @@ BOOL isConvColorBgEnabled() {
 BOOL isConvImageBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
+}
+
+BOOL isCustomTextColorsEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isCustomTextColorsEnabled"] ? [prefs[@"isCustomTextColorsEnabled"] boolValue] : NO;
+}
+
+CGFloat getImageBlurAmount() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"imageBlurAmount"] ? [prefs[@"imageBlurAmount"] floatValue] : 0.0;
+}
+
+UIColor *colorFromHex(NSString *hexString) {
+	if (!hexString || [hexString length] == 0) return nil;
+
+	if ([hexString hasPrefix:@"#"]) {
+		hexString = [hexString substringFromIndex:1];
+	}
+
+	unsigned int hex = 0;
+	NSScanner *scanner = [NSScanner scannerWithString:hexString];
+	[scanner scanHexInt:&hex];
+
+	CGFloat r = ((hex >> 16) & 0xFF) / 255.0;
+	CGFloat g = ((hex >> 8) & 0xFF) / 255.0;
+	CGFloat b = (hex & 0xFF) / 255.0;
+
+	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+}
+
+UIColor *getBackgroundColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"convListBackgroundColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor blackColor];
+}
+
+UIColor *getCellColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"convListCellColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor blackColor];
+}
+
+UIColor *getTitleTextColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"titleTextColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor whiteColor];
+}
+
+UIColor *getMessagePreviewTextColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"messagePreviewTextColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor grayColor];
+}
+
+UIColor *getDateTimeTextColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"dateTimeTextColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor grayColor];
+}
+
+UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
+	if (blurAmount <= 0) return image;
+
+	CIContext *context = [CIContext contextWithOptions:nil];
+	CIImage *inputImage = [CIImage imageWithCGImage:image.CGImage];
+
+	CIFilter *blurFilter = [CIFilter filterWithName:@"CIGaussianBlur"];
+	[blurFilter setValue:inputImage forKey:kCIInputImageKey];
+	[blurFilter setValue:@(blurAmount) forKey:kCIInputRadiusKey];
+
+	CIImage *outputImage = [blurFilter outputImage];
+
+	CGRect extent = [inputImage extent];
+	outputImage = [outputImage imageByCroppingToRect:extent];
+
+	CGImageRef cgImage = [context createCGImage:outputImage fromRect:extent];
+	UIImage *blurredImage = [UIImage imageWithCGImage:cgImage scale:image.scale orientation:image.imageOrientation];
+	CGImageRelease(cgImage);
+
+	return blurredImage;
+}
+
+void applyCustomTextColors(UIView *view) {
+	if (!isCustomTextColorsEnabled()) return;
+
+	if ([view isKindOfClass:%c(CKLabel)]) {
+		UILabel *label = (UILabel *)view;
+		label.textColor = getTitleTextColor();
+	}
+	else if ([view isKindOfClass:%c(CKDateLabel)]) {
+		UILabel *label = (UILabel *)view;
+		label.textColor = getDateTimeTextColor();
+	}
+	else if ([view isKindOfClass:[UILabel class]]) {
+		UILabel *label = (UILabel *)view;
+		label.textColor = getMessagePreviewTextColor();
+	}
+	else if ([view isKindOfClass:[UIImageView class]]) {
+		UIImageView *imageView = (UIImageView *)view;
+		if (imageView.image.renderingMode == UIImageRenderingModeAlwaysTemplate || 
+		    imageView.image.renderingMode == UIImageRenderingModeAutomatic) {
+			imageView.tintColor = getDateTimeTextColor();
+		}
+	}
+	
+	for (UIView *subview in view.subviews) {
+		applyCustomTextColors(subview);
+	}
 }
 
 %hook CKConversationListCollectionViewController
@@ -44,6 +181,17 @@ BOOL isConvImageBgEnabled() {
 		object:nil];
 }
 
+%new
+-(void)applyCustomColorsToCKLabelsInView:(UIView *)view {
+	for (UIView *subview in view.subviews) {
+		if ([subview isKindOfClass:%c(CKLabel)]) {
+			CKLabel *label = (CKLabel *)subview;
+			label.textColor = getTitleTextColor();
+		}
+		[self applyCustomColorsToCKLabelsInView:subview];
+	}
+}
+
 -(void)viewDidLayoutSubviews {
 	%orig;
 	
@@ -53,9 +201,12 @@ BOOL isConvImageBgEnabled() {
 	
 	if (isConvImageBgEnabled() && !isConvColorBgEnabled()) {
 		[self makeSubviewsTransparent:self.view];
-		[self makeSubviewsTransparent:self.collectionView];
+		[self makeSubviewsTransparent:self.collectionView];	
 	}
+	
+	[self applyCustomColorsToCKLabelsInView:self.view];
 }
+
 
 %new
 -(void)updateBackground {
@@ -64,17 +215,21 @@ BOOL isConvImageBgEnabled() {
 	
 	if (isConvColorBgEnabled()) {
 		UIView *colorView = [[UIView alloc] initWithFrame:self.collectionView.bounds];
-		colorView.backgroundColor = [UIColor blueColor];
+		colorView.backgroundColor = getBackgroundColor();
 		colorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-		
 		self.collectionView.backgroundView = colorView;
+
 	} else if (bgImage && isConvImageBgEnabled()) {
+		CGFloat blurAmount = getImageBlurAmount();
+		if (blurAmount > 0) {
+			bgImage = blurImage(bgImage, blurAmount);
+		}
+		
 		UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.collectionView.bounds];
 		imageView.image = bgImage;
 		imageView.contentMode = UIViewContentModeScaleAspectFill;
 		imageView.clipsToBounds = YES;
 		imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-		
 		self.collectionView.backgroundView = imageView;
 
 		UIImageView *mainBgView = [[UIImageView alloc] initWithFrame:self.view.bounds];
@@ -119,9 +274,6 @@ BOOL isConvImageBgEnabled() {
 
 %end
 
-@interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
-@end
-
 %hook CKConversationListCollectionViewConversationCell
 
 -(instancetype)initWithFrame:(CGRect)frame {
@@ -131,9 +283,7 @@ BOOL isConvImageBgEnabled() {
 	self = %orig(frame);
 	if (self) {
 		if (isConvColorBgEnabled()) {
-			self.contentView.backgroundColor = [UIColor redColor];
-			self.layer.borderColor = [UIColor greenColor].CGColor;
-			self.layer.borderWidth = 2.0;
+			self.contentView.backgroundColor = getCellColor();
 		} else if (isConvImageBgEnabled()) {
 			self.backgroundColor = [UIColor clearColor];
 			self.contentView.backgroundColor = [UIColor clearColor];
@@ -145,5 +295,76 @@ BOOL isConvImageBgEnabled() {
 	return self;
 }
 
+-(void)layoutSubviews {
+	%orig;
+
+	if (!isTweakEnabled()) return;
+
+	applyCustomTextColors(self);
+}
 
 %end
+
+%hook UILabel
+
+- (void)setTextColor:(UIColor *)color {
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        %orig;
+        return;
+    }
+
+    UIView *superview = self.superview;
+    BOOL isInConversationCell = NO;
+    while (superview) {
+        if ([superview isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]) {
+            isInConversationCell = YES;
+            break;
+        }
+        superview = superview.superview;
+    }
+
+    if (isInConversationCell) {
+        if ([self isKindOfClass:%c(CKLabel)]) {
+            %orig(getTitleTextColor());
+        } else if ([self isKindOfClass:%c(CKDateLabel)]) {
+            %orig(getDateTimeTextColor());
+        } else if ([self isKindOfClass:[UILabel class]]) {
+            %orig(getMessagePreviewTextColor());
+        } else {
+			%orig;
+		}
+		return;
+    }
+	%orig;
+}
+
+%end
+
+%hook UIImageView
+
+-(void)setTintColor:(UIColor *)color {
+	if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+		%orig;
+		return;
+	}
+
+	UIView *superview = self.superview;
+	BOOL isInConversationCell = NO;
+	while (superview) {
+		if ([superview isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]) {
+			isInConversationCell = YES;
+			break;
+		}
+		superview = superview.superview;
+	}
+
+	if (!isInConversationCell) {
+		%orig;
+		return;
+	}
+
+	%orig(getDateTimeTextColor());
+}
+
+%end
+

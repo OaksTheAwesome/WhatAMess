@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>WhatAMessPrefs First Page</string>
+			<string>General Settings</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -22,29 +22,59 @@
 			<key>key</key>
 			<string>isEnabled</string>
 		</dict>
+		
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Color Background</string>
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
-    		<key>label</key>
-    		<string>Enable Color Background</string>
-    		<key>key</key>
-    		<string>isConvColorBgEnabled</string>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>default</key>
-    		<true/>
+			<key>label</key>
+			<string>Enable Color Background</string>
+			<key>key</key>
+			<string>isConvColorBgEnabled</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<false/>
 		</dict>
 		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>label</key>
-    		<string>Enable Conversation List Image Background</string>
-    		<key>key</key>
-    		<string>isConvImageBgEnabled</string>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>default</key>
-    		<false/>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Background Color</string>
+			<key>action</key>
+			<string>pickBackgroundColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Cell Color</string>
+			<key>action</key>
+			<string>pickCellColor</string>
+		</dict>
+		
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Image Background</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>Enable Image Background</string>
+			<key>key</key>
+			<string>isConvImageBgEnabled</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<false/>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -53,6 +83,69 @@
 			<string>Pick Background Image</string>
 			<key>action</key>
 			<string>pickConvListBgImage</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>Image Blur Amount</string>
+			<key>key</key>
+			<string>imageBlurAmount</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>0</real>
+			<key>max</key>
+			<real>100</real>
+			<key>showValue</key>
+			<true/>
+			<key>isSegmented</key>
+			<false/>
+		</dict>
+		
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Text Colors</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>Enable Custom Text Colors</string>
+			<key>key</key>
+			<string>isCustomTextColorsEnabled</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Title Color</string>
+			<key>action</key>
+			<string>pickTitleColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Message Preview Color</string>
+			<key>action</key>
+			<string>pickMessagePreviewColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Date/Time Color</string>
+			<key>action</key>
+			<string>pickDateTimeColor</string>
 		</dict>
 	</array>
 	<key>title</key>

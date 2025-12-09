@@ -6,6 +6,19 @@
 - (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
 @end
 
+@interface _UINavigationBarContentView : UIView
+@end
+
+@interface _UIBarBackground : UIView
+@end
+
+@interface _UIVisualEffectBackdropView : UIView
+@end
+
+@interface UIView (Private)
+- (UIViewController *)_viewControllerForAncestor;
+@end
+
 @interface CKLabel : UILabel
 @end
 
@@ -274,7 +287,6 @@ void applyCustomTextColors(UIView *view) {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	%orig;
 }
-
 %end
 
 %hook CKConversationListCollectionViewConversationCell
@@ -370,4 +382,92 @@ void applyCustomTextColors(UIView *view) {
 }
 
 %end
+
+%hook _UIBarBackground
+- (void)layoutSubviews {
+    %orig;
+
+    if (!isTweakEnabled()) return;
+
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            [sub removeFromSuperview];
+        }
+    }
+
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+
+    CGRect blurFrame = self.bounds;
+    blurFrame.size.height += 55;
+    blurView.frame = blurFrame;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self insertSubview:blurView atIndex:0];
+
+    CAGradientLayer *maskLayer = [CAGradientLayer layer];
+    maskLayer.frame = blurView.bounds;
+    maskLayer.colors = @[
+        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+		(id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+		(id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor
+    ];
+    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
+    blurView.layer.mask = maskLayer;
+}
+%end
+
+%hook _UINavigationBarContentView
+
+- (void)didAddSubview:(UIView *)subview {
+    %orig;
+
+    if (!isTweakEnabled()) return;
+
+    // Only apply to _UIButtonBarButton instances
+    if ([subview isKindOfClass:NSClassFromString(@"_UIButtonBarButton")]) {
+
+        // Check for our bubble already
+        BOOL hasBubble = NO;
+        for (UIView *v in self.subviews) {
+            if (v.tag == 9999) { // Arbitrary tag to identify our bubble
+                hasBubble = YES;
+                break;
+            }
+        }
+        if (hasBubble) return;
+
+        // Create a blur effect bubble
+        UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial];
+        UIVisualEffectView *bubble = [[UIVisualEffectView alloc] initWithEffect:blur];
+
+        // Round it
+        bubble.layer.cornerRadius = 18; // adjust radius
+        bubble.layer.masksToBounds = YES;
+
+        // Slightly smaller than button, behind it
+        CGRect buttonFrame = subview.frame;
+        CGFloat padding = 6;
+        bubble.frame = CGRectMake(
+            buttonFrame.origin.x - padding,
+            buttonFrame.origin.y - padding,
+            buttonFrame.size.width + 2*padding,
+            buttonFrame.size.height + 2*padding
+        );
+
+        bubble.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
+
+        // Place behind the button
+        [self insertSubview:bubble belowSubview:subview];
+
+        // Tag for future reference
+        bubble.tag = 9999;
+    }
+}
+
+%end
+
+
+
 

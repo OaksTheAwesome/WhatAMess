@@ -122,6 +122,11 @@
 	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
 }
 
+- (void)openConversationListTitleColorPicker {
+	_currentColorKey = @"conversationListTitleColor";
+	[self showColorPicker];
+}
+
 // Image picker methods
 - (void)pickConvListBgImage {
     UIImagePickerController *picker = [[UIImagePickerController alloc] init];

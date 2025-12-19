@@ -6,10 +6,12 @@
 - (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
 @end
 
-@interface _UINavigationBarContentView : UIView
+@interface _UIBarBackground : UIView
 @end
 
-@interface _UIBarBackground : UIView
+@class CKConversationListCollectionViewController;
+
+@interface _UINavigationBarTitleControl : UIControl
 @end
 
 @interface _UIVisualEffectBackdropView : UIView
@@ -124,6 +126,19 @@ UIColor *getDateTimeTextColor() {
 	NSString *colorString = prefs[@"dateTimeTextColor"];
 	UIColor *color = colorFromHex(colorString);
 	return color ?: [UIColor grayColor];
+}
+
+UIColor *getConversationListTitleColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"conversationListTitleColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor whiteColor];
+}
+
+static NSString *getConversationListTitle() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *title = prefs[@"conversationListTitleText"];
+	return title.length > 0 ? title : @"Messages";
 }
 
 UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
@@ -418,56 +433,24 @@ void applyCustomTextColors(UIView *view) {
 }
 %end
 
-%hook _UINavigationBarContentView
+%hook _UINavigationBarTitleControl
 
-- (void)didAddSubview:(UIView *)subview {
+- (void)layoutSubviews {
     %orig;
 
     if (!isTweakEnabled()) return;
 
-    // Only apply to _UIButtonBarButton instances
-    if ([subview isKindOfClass:NSClassFromString(@"_UIButtonBarButton")]) {
+    for (UIView *sub in self.subviews) {
+        if (![sub isKindOfClass:[UILabel class]]) continue;
 
-        // Check for our bubble already
-        BOOL hasBubble = NO;
-        for (UIView *v in self.subviews) {
-            if (v.tag == 9999) { // Arbitrary tag to identify our bubble
-                hasBubble = YES;
-                break;
-            }
+        UILabel *label = (UILabel *)sub;
+
+        // Only change the title if it's the main Messages title
+        if ([label.text isEqualToString:@"Messages"]) {
+            label.text = getConversationListTitle();           // Custom text
+            label.textColor = getConversationListTitleColor(); // Custom color
         }
-        if (hasBubble) return;
-
-        // Create a blur effect bubble
-        UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial];
-        UIVisualEffectView *bubble = [[UIVisualEffectView alloc] initWithEffect:blur];
-
-        // Round it
-        bubble.layer.cornerRadius = 18; // adjust radius
-        bubble.layer.masksToBounds = YES;
-
-        // Slightly smaller than button, behind it
-        CGRect buttonFrame = subview.frame;
-        CGFloat padding = 6;
-        bubble.frame = CGRectMake(
-            buttonFrame.origin.x - padding,
-            buttonFrame.origin.y - padding,
-            buttonFrame.size.width + 2*padding,
-            buttonFrame.size.height + 2*padding
-        );
-
-        bubble.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin;
-
-        // Place behind the button
-        [self insertSubview:bubble belowSubview:subview];
-
-        // Tag for future reference
-        bubble.tag = 9999;
     }
 }
 
 %end
-
-
-
-

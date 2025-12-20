@@ -1,5 +1,8 @@
 #import <UIKit/UIKit.h>
 
+/*Interfaces, declare to hook certain things. Ex: Want to change label colors, hook CKLabel,
+inherits attributes from UILabel*/
+/*---------------------------------------------------*/
 @interface CKConversationListCollectionViewController : UICollectionViewController
 -(void)updateBackground;
 -(void)makeSubviewsTransparent:(UIView *)view;
@@ -7,6 +10,15 @@
 @end
 
 @interface _UIBarBackground : UIView
+@end
+
+@interface _UICollectionViewListSeparatorView : UIView
+@end
+
+@interface _UISearchBarSearchFieldBackgroundView : UIView
+@end
+
+@interface CKPinnedConversationView : UIView
 @end
 
 @class CKConversationListCollectionViewController;
@@ -33,12 +45,24 @@
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
 @end
 
+/* ===================
+  PREFERENCE THINGS 
+==================== */
+
+/* Define paths for preferences to save to (in the case of kImagePath, where to save image
+and how to name it [background.jpg]). Notification is used to post the preference change and update tweak.
+In case of messages, no respring is *required*, just close and reopen app a couple of times. */
+/*--------------------------------------------------------------------------*/
 #define kPrefsPath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 
+/* Basically just holds preferences for a bit so they don't have to be reread everytime. */
 static NSDictionary *cachedPrefs = nil;
 
+/* Loads the preferences from the indicated path (defined in kPrefsPath). Checks chachedPrefs, if it = nil,
+reads the plist (root.plist) into a NSDictionary. If cachedPrefs is already set, it returns the cached dictionary,
+avoiding repeated reading from kPrefsPath. */
 static NSDictionary *loadPrefs() {
 	if (!cachedPrefs) {
 		cachedPrefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
@@ -46,35 +70,64 @@ static NSDictionary *loadPrefs() {
 	return cachedPrefs;
 }
 
+/* Resets cachedPrefs to nil, forces loadPrefs to read from kPrefsPath again. Useful for a prefs change
+when tweak is running. */
 static void clearPrefsCache() {
 	cachedPrefs = nil;
 }
 
+/* Checks whether tweak is enabled according to prefs. Reads from prefs directly. Converts key "isEnabled" to
+a boolean value, defaults to YES otherwise (if , for example, no preference has been set yet, like with fresh install). */
 BOOL isTweakEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isEnabled"] ? [prefs[@"isEnabled"] boolValue] : YES;
 }
+/* Checks if separators are enabled/disabled. Uses loadPrefs and defaults to NO. */
+BOOL isSeparatorsEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isSeparatorsEnabled"] ? [prefs[@"isSeparatorsEnabled"] boolValue] : NO;
+}
 
+/* Checks if search bar background is enabled/disabled. Uses loadPrefs, defaults to NO (bar on/not affected). */
+BOOL isSearchBgEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isSearchBgEnabled"] ? [prefs[@"isSearchBgEnabled"] boolValue] : NO;
+}
+
+/* Checks if pinned conversation glow hiding is enabled/disabled. Uses loadPrefs, defaults to NO. */
+BOOL isPinnedGlowEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isPinnedGlowEnabled"] ? [prefs[@"isPinnedGlowEnabled"] boolValue] : NO;
+}
+
+/* Checks if conversation list bg is enabled. Reads directly from prefs. Defaults to YES. */
 BOOL isConvColorBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvColorBgEnabled"] ? [prefs[@"isConvColorBgEnabled"] boolValue] : YES;
 }
 
+/* Checks if conversation list image background is enabled. Reads directly from prefs. Defaults to NO. */
 BOOL isConvImageBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
 }
 
+/* Checks if custom text colors should be enabled. Uses loadPrefs, defaults to NO. */
 BOOL isCustomTextColorsEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isCustomTextColorsEnabled"] ? [prefs[@"isCustomTextColorsEnabled"] boolValue] : NO;
 }
 
+/* Checks the amount of blur to apply to image based on user slider input. 
+Uses loadPrefs, defaults to 0.0 (no blurring). */
 CGFloat getImageBlurAmount() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"imageBlurAmount"] ? [prefs[@"imageBlurAmount"] floatValue] : 0.0;
 }
 
+/* Checks if input string is nil/empty. If it is, returns nil. If hex string has a leading "#", removes
+that and ensures scanner only sees hex digits. Converts the hex string to an int. NSScanner parses string
+into a numeric value. Then extracts RGB components and returns a useable UIColor. */
 UIColor *colorFromHex(NSString *hexString) {
 	if (!hexString || [hexString length] == 0) return nil;
 
@@ -93,6 +146,8 @@ UIColor *colorFromHex(NSString *hexString) {
 	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
 }
 
+/* Loads prefs, reads background color hex from prefs string "convListBackgroundColor". Converts to 
+UIColor using colorFromHex, and defaults to black otherwise. */
 UIColor *getBackgroundColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"convListBackgroundColor"];
@@ -100,6 +155,7 @@ UIColor *getBackgroundColor() {
 	return color ?: [UIColor blackColor];
 }
 
+/* Same as above, just for the cells instead of the background. Defaults to black. */
 UIColor *getCellColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"convListCellColor"];
@@ -107,6 +163,7 @@ UIColor *getCellColor() {
 	return color ?: [UIColor blackColor];
 }
 
+/* Same again, loads hex string for color for title text, defaults to white. */
 UIColor *getTitleTextColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"titleTextColor"];
@@ -114,6 +171,7 @@ UIColor *getTitleTextColor() {
 	return color ?: [UIColor whiteColor];
 }
 
+/* Same again, loads hex string for color of message previews, defaults to gray. */
 UIColor *getMessagePreviewTextColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"messagePreviewTextColor"];
@@ -121,6 +179,7 @@ UIColor *getMessagePreviewTextColor() {
 	return color ?: [UIColor grayColor];
 }
 
+/* Same again, loads hex string for color of date/time and chevron. Defaults to gray. */
 UIColor *getDateTimeTextColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"dateTimeTextColor"];
@@ -128,6 +187,7 @@ UIColor *getDateTimeTextColor() {
 	return color ?: [UIColor grayColor];
 }
 
+/* Same again, loads hex string for color of main conv list "Messages" title. Defaults to white. */
 UIColor *getConversationListTitleColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"conversationListTitleColor"];
@@ -135,12 +195,16 @@ UIColor *getConversationListTitleColor() {
 	return color ?: [UIColor whiteColor];
 }
 
+/* Gets text input from user to override "Messages" title. Defaults to stock title otherwise. */
 static NSString *getConversationListTitle() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *title = prefs[@"conversationListTitleText"];
 	return title.length > 0 ? title : @"Messages";
 }
 
+/* Basically applies a gaussian blur to the user selected image. If 0 or negative, returns the original image.
+Creates the blur filter, sets the image and the radius of said blur, and crops image to match the size
+of the original input image. Converts the CIImage back to a UIImage, and returns the blurred image. */
 UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
 	if (blurAmount <= 0) return image;
 
@@ -163,6 +227,10 @@ UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
 	return blurredImage;
 }
 
+/* This applies custom text colors to labels and image views based on type. 
+If CKLabel, sets title text color. If CKDateLabel, sets date/time color. If standard UILabel, sets
+message preview color. If UIImageView, sets tint to image, coloring chevron. Checks subviews to ensure
+all colors are applied throughout view hierarchy. */
 void applyCustomTextColors(UIView *view) {
 	if (!isCustomTextColorsEnabled()) return;
 
@@ -191,8 +259,16 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+/* ===========
+    HOOKS 
+============*/
+
+/* Main view controller for Messages conversation list view. Everything inside modifies appearance. */
 %hook CKConversationListCollectionViewController
 
+/* Calls original function first. Checks if tweak is enabled. Sets main view and conversation collection view
+to clear, allowing custom BG to show. Calls updateBackground to apply colored bg/image bg. Also includes
+prefs listener to update bg as prefs are changed. */
 -(void)viewDidLoad {
 	%orig;
 
@@ -211,6 +287,8 @@ void applyCustomTextColors(UIView *view) {
 		object:nil];
 }
 
+/* Walks through view's subviews, if its a CKLabel, sets its text color to the custom title color. Calls for
+each subview just in case. */
 %new
 -(void)applyCustomColorsToCKLabelsInView:(UIView *)view {
 	for (UIView *subview in view.subviews) {
@@ -222,6 +300,8 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+/* Called whenever subview layouts change. Makes subviews transparent if custom image bg is enabled.
+Applies custom label colors. */
 -(void)viewDidLayoutSubviews {
 	%orig;
 	
@@ -237,6 +317,11 @@ void applyCustomTextColors(UIView *view) {
 	[self applyCustomColorsToCKLabelsInView:self.view];
 }
 
+/* Clears prefs chache, checks for custom image, and loads if present. If color bg is enabled, creates the
+colored view behind all cells. If image bg is enabled, provides the blur option, if added. Adds to both
+collection view background and main view so it covers it all. Calls makeSubviewsTransparent to ensure
+background subviews are clear and show image. If no bg is set, clears. Finally, reloads collection to show 
+changes.*/
 %new
 -(void)updateBackground {
 	clearPrefsCache();
@@ -279,6 +364,7 @@ void applyCustomTextColors(UIView *view) {
 	[self.collectionView reloadData];
 }
 
+/* Checks subviews. If view is black/dark and opaque, sets to clear. Helps to show image bg. */
 %new
 -(void)makeSubviewsTransparent:(UIView *)view {
 	for (UIView *subview in view.subviews) {
@@ -297,15 +383,18 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
-
+/* Removes tweak prefs observer. */
 -(void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	%orig;
 }
 %end
 
+/* Modified cell colors/appearance. */
 %hook CKConversationListCollectionViewConversationCell
-
+ 
+ /* Sets cell bg according to tweak prefs: color (user indicaated), image (clear to allow image to 
+ be visible), or clear as default.*/
 -(instancetype)initWithFrame:(CGRect)frame {
 	if (!isTweakEnabled()) {
 		return %orig(frame);
@@ -325,6 +414,7 @@ void applyCustomTextColors(UIView *view) {
 	return self;
 }
 
+/* Calls applyCustomTextColors to cell to color labels in cell. */
 -(void)layoutSubviews {
 	%orig;
 
@@ -335,8 +425,11 @@ void applyCustomTextColors(UIView *view) {
 
 %end
 
+/* Modifies labels. */
 %hook UILabel
-
+ 
+ /* Overrides label color when inside a cell. Checks label types and applies accoring colors from prefs.
+ Ensures all labels in cells follow tweak's color settings. */
 - (void)setTextColor:(UIColor *)color {
     if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
         %orig;
@@ -370,6 +463,9 @@ void applyCustomTextColors(UIView *view) {
 
 %end
 
+/* Overrides setTintColor to enforce custom tint colors in conv cells. Checks whether the tweak and custom
+text colors are enabled. Checks if image view is inside CKConvListCollectionViewConvCell. If in such cell,
+sets tint color, if not, calls original method.*/
 %hook UIImageView
 
 -(void)setTintColor:(UIColor *)color {
@@ -398,6 +494,9 @@ void applyCustomTextColors(UIView *view) {
 
 %end
 
+/* Hooks the navigation bar background and removes any defualt blurs. Creates a new blur effect and expands
+it to provide more room for gradient. Gradient mask allows blur to fade smoothly from opaque to transparent,
+top to bottom. */
 %hook _UIBarBackground
 - (void)layoutSubviews {
     %orig;
@@ -433,6 +532,8 @@ void applyCustomTextColors(UIView *view) {
 }
 %end
 
+/* Targets NavBar Title, only modifying the label titled "Messages" to avoid modifying other name views
+across messages app. Replaces the title with a custom user string and sets a custom color. */
 %hook _UINavigationBarTitleControl
 
 - (void)layoutSubviews {
@@ -451,6 +552,62 @@ void applyCustomTextColors(UIView *view) {
             label.textColor = getConversationListTitleColor(); // Custom color
         }
     }
+}
+
+%end
+
+/* Controls separators between cells. Hides them if toggle is true. Simple enough. */
+%hook _UICollectionViewListSeparatorView
+
+- (void) didMoveToWindow {
+	%orig;
+
+	if (!isTweakEnabled()) return;
+
+	if (isSeparatorsEnabled()) {
+		self.hidden = YES;
+		self.alpha = 0.0;
+	} else {
+		self.hidden = NO;
+		self.alpha = 1.0;
+	}
+}
+
+%end
+
+/* Controls background of search bar. If toggled true, hides background. Othewise, is shown. Simple. */
+%hook _UISearchBarSearchFieldBackgroundView
+
+- (void) didMoveToWindow {
+	%orig;
+
+	if (!isTweakEnabled()) return;
+
+	if (isSearchBgEnabled()) {
+		self.hidden = YES;
+	} else {
+		self.hidden = NO;
+	}
+}
+
+%end
+
+/* Handles glow behind pinned conversations. If toggled true, hides. Otherwise, shown. Simple again. */
+%hook CKPinnedConversationView
+
+-(void) didMoveToWindow {
+	%orig;
+
+	if (!isTweakEnabled()) return;
+
+	for (UIView *sub in self.subviews) {
+		if (![sub isKindOfClass:[UIImageView class]]) continue;
+
+		UIImageView *img = (UIImageView *)sub;
+
+		img.hidden = isPinnedGlowEnabled();
+		img.alpha = isPinnedGlowEnabled() ? 1.0 : 0.0;
+	}
 }
 
 %end

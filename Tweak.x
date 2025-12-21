@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 
+
 /*Interfaces, declare to hook certain things. Ex: Want to change label colors, hook CKLabel,
 inherits attributes from UILabel*/
 /*---------------------------------------------------*/
@@ -45,9 +46,11 @@ inherits attributes from UILabel*/
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
 @end
 
+
 /* ===================
   PREFERENCE THINGS 
 ==================== */
+
 
 /* Define paths for preferences to save to (in the case of kImagePath, where to save image
 and how to name it [background.jpg]). Notification is used to post the preference change and update tweak.
@@ -259,9 +262,11 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+
 /* ===========
     HOOKS 
 ============*/
+
 
 /* Main view controller for Messages conversation list view. Everything inside modifies appearance. */
 %hook CKConversationListCollectionViewController

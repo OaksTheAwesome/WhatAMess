@@ -6,4 +6,4 @@ Description: An awesome MobileSubstrate tweak!
 Maintainer: OaksTheAwesome
 Author: OaksTheAwesome
 Section: Tweaks
-Depends: mobilesubstrate (>= 0.9.5000), com.spark.libsparkcolourpicker
+Depends: mobilesubstrate (>= 0.9.5000)

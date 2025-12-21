@@ -4,10 +4,15 @@ include $(THEOS)/makefiles/common.mk
 
 BUNDLE_NAME = WhatAMessPrefs
 
-WhatAMessPrefs_FILES = WAMRootListController.m
+WhatAMessPrefs_FILES = WAMRootListController.m \
+						WAMConvListController.m
+
 WhatAMessPrefs_FRAMEWORKS = UIKit
 WhatAMessPrefs_PRIVATE_FRAMEWORKS = Preferences
 WhatAMessPrefs_INSTALL_PATH = /Library/PreferenceBundles
 WhatAMessPrefs_CFLAGS = -fobjc-arc
+WhatAMessPrefs_BUNDLE_RESOURCES = \
+    Root.plist \
+    ConvList.plist
 
 include $(THEOS_MAKE_PATH)/bundle.mk

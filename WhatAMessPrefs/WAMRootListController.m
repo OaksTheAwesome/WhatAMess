@@ -29,9 +29,22 @@
 
 /* Resping method lol */
 - (void)respring {
-	pid_t pid;
-	const char* args[] = {"killall", "SpringBoard", NULL};
-	posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, (char* const*)args, NULL);
+	/* Confirmation alert dialog */
+	UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Respring"
+		message:@"Are you sure you want to respring?"
+		preferredStyle:UIAlertControllerStyleAlert];
+	
+	[alert addAction:[UIAlertAction actionWithTitle:@"Not Yet" style:UIAlertActionStyleCancel handler:nil]];
+	
+	[alert addAction:[UIAlertAction actionWithTitle:@"Respring" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+		/* reload sb */
+		pid_t pid;
+		const char* args[] = {"sbreload", NULL};
+		posix_spawn(&pid, "/var/jb/usr/bin/sbreload", NULL, NULL, (char* const*)args, NULL);
+	}]];
+	
+	[self presentViewController:alert animated:YES completion:nil];
 }
+
 
 @end

@@ -5,7 +5,8 @@ include $(THEOS)/makefiles/common.mk
 BUNDLE_NAME = WhatAMessPrefs
 
 WhatAMessPrefs_FILES = WAMRootListController.m \
-					WAMConvListController.m
+					WAMConvListController.m \
+					WAMChatViewController.m
 
 WhatAMessPrefs_FRAMEWORKS = UIKit
 WhatAMessPrefs_PRIVATE_FRAMEWORKS = Preferences

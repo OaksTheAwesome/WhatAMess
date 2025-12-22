@@ -10,6 +10,15 @@ inherits attributes from UILabel*/
 - (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
 @end
 
+@interface CKTranscriptCollectionViewController : UIViewController
+@end
+
+@interface CKGradientReferenceView : UIView
+@end
+
+@interface CKMessagesController : UIViewController
+@end
+
 @interface _UIBarBackground : UIView
 @end
 
@@ -58,6 +67,7 @@ In case of messages, no respring is *required*, just close and reopen app a coup
 /*--------------------------------------------------------------------------*/
 #define kPrefsPath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
+#define kChatImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 
 /* Basically just holds preferences for a bit so they don't have to be reread everytime. */
@@ -85,6 +95,13 @@ BOOL isTweakEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isEnabled"] ? [prefs[@"isEnabled"] boolValue] : YES;
 }
+
+/* Checks if Modern NavBar is enabled/disabled. Uses loadPrefs and defaults to YES. */
+BOOL isModernNavBarEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isModernNavBarEnabled"] ? [prefs[@"isModernNavBarEnabled"] boolValue] : YES;
+}
+
 /* Checks if separators are enabled/disabled. Uses loadPrefs and defaults to NO. */
 BOOL isSeparatorsEnabled() {
 	NSDictionary *prefs = loadPrefs();
@@ -109,10 +126,20 @@ BOOL isConvColorBgEnabled() {
 	return prefs[@"isConvColorBgEnabled"] ? [prefs[@"isConvColorBgEnabled"] boolValue] : YES;
 }
 
+BOOL isChatColorBgEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isChatColorBgEnabled"] ? [prefs[@"isChatColorBgEnabled"] boolValue] : NO;
+}
+
 /* Checks if conversation list image background is enabled. Reads directly from prefs. Defaults to NO. */
 BOOL isConvImageBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
+}
+
+BOOL isChatImageBgEnabled() {
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+	return prefs[@"isChatImageBgEnabled"] ? [prefs[@"isChatImageBgEnabled"] boolValue] : NO;
 }
 
 /* Checks if custom text colors should be enabled. Uses loadPrefs, defaults to NO. */
@@ -126,6 +153,11 @@ Uses loadPrefs, defaults to 0.0 (no blurring). */
 CGFloat getImageBlurAmount() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"imageBlurAmount"] ? [prefs[@"imageBlurAmount"] floatValue] : 0.0;
+}
+
+CGFloat getChatImageBlurAmount() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"chatBlurAmount"] ? [prefs[@"chatBlurAmount"] floatValue] : 0.0;
 }
 
 /* Checks if input string is nil/empty. If it is, returns nil. If hex string has a leading "#", removes
@@ -154,6 +186,13 @@ UIColor using colorFromHex, and defaults to black otherwise. */
 UIColor *getBackgroundColor() {
 	NSDictionary *prefs = loadPrefs();
 	NSString *colorString = prefs[@"convListBackgroundColor"];
+	UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor blackColor];
+}
+
+UIColor *getChatBackgroundColor() {
+	NSDictionary *prefs = loadPrefs();
+	NSString *colorString = prefs[@"chatBackgroundColor"];
 	UIColor *color = colorFromHex(colorString);
 	return color ?: [UIColor blackColor];
 }
@@ -506,7 +545,10 @@ top to bottom. */
 - (void)layoutSubviews {
     %orig;
 
-    if (!isTweakEnabled()) return;
+    if (!isTweakEnabled() || !isModernNavBarEnabled()) {
+		%orig;
+		return;
+	}
 
     for (UIView *sub in self.subviews) {
         if ([sub isKindOfClass:[UIVisualEffectView class]]) {
@@ -612,6 +654,55 @@ across messages app. Replaces the title with a custom user string and sets a cus
 
 		img.hidden = isPinnedGlowEnabled();
 		img.alpha = isPinnedGlowEnabled() ? 1.0 : 0.0;
+	}
+}
+
+%end
+
+%hook CKTranscriptCollectionViewController
+
+- (void)viewDidLoad {
+    %orig;
+	self.view.backgroundColor = [UIColor clearColor];
+}
+
+-(BOOL)shouldUseOpaqueMask{
+	return NO;
+}
+%end
+
+%hook CKGradientReferenceView
+	
+-(void)setFrame:(CGRect)arg1 {
+	%orig;
+	self.backgroundColor = [UIColor clearColor];
+}
+
+%end
+
+
+%hook CKMessagesController
+
+-(void) viewDidLoad{
+	%orig;
+
+	self.view.backgroundColor = [UIColor clearColor];
+
+	BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+	UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+
+	if(!isTweakEnabled() && !isChatImageBgEnabled()) {
+		CGFloat blurAmount = getChatImageBlurAmount();
+		if (blurAmount > 0) {
+			chatBgImage = blurImage(chatBgImage, blurAmount);
+		}
+
+		UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.view.bounds];
+		imageView.image = chatBgImage;
+		imageView.contentMode = UIViewContentModeScaleAspectFill;
+		imageView.clipsToBounds = YES;
+		imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		[self.view insertSubview:imageView atIndex:0];
 	}
 }
 

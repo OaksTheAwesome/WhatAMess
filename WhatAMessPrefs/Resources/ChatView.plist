@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Color Background</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>Enable Color Background</string>
+			<key>key</key>
+			<string>isChatColorBgEnabled</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Background Color</string>
+			<key>action</key>
+			<string>pickChatBackgroundColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Image Background</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>Enable Image Background</string>
+			<key>key</key>
+			<string>isChatImageBgEnabled</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Pick Background Image</string>
+			<key>action</key>
+			<string>pickChatBgImage</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>label</key>
+			<string>Image Blur Amount</string>
+			<key>key</key>
+			<string>chatImageBlurAmount</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>0</real>
+			<key>max</key>
+			<real>100</real>
+			<key>showValue</key>
+			<true/>
+			<key>isSegmented</key>
+			<false/>
+		</dict>
+	</array>
+	<key>title</key>
+	<string>Chat View Settings</string>
+</dict>
+</plist>

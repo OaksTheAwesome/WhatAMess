@@ -9,6 +9,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Color Background</string>
+			<key>footerText</key>
+			<string>It's recommended to only use EITHER the color background or the image background. Having both toggled on at once may be visually unappealing. (Not to mention slightly more intensive.)</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -26,7 +28,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Choose Background Color</string>
+			<string>Choose Pinned Background Color</string>
 			<key>action</key>
 			<string>pickBackgroundColor</string>
 		</dict>
@@ -34,7 +36,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Choose Cell Color</string>
+			<string>Choose Cell Background Color</string>
 			<key>action</key>
 			<string>pickCellColor</string>
 		</dict>
@@ -43,6 +45,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Image Background</string>
+			<key>footerText</key>
+			<string>This slider controls the blur of the image.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -89,6 +93,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Text Colors</string>
+			<key>footerText</key>
+			<string>Title color affects both pinned and conversation list titles. Date/Time color also affects chevrons. </string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -128,6 +134,14 @@
 		</dict>
 		<dict>
 			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>NavBar Title</string>
+			<key>footerText</key>
+			<string>Controls the "Messages" title in the Navigation Bar. Leave title field blank for the default title.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
 			<string>PSEditTextCell</string>
 			<key>label</key>
 			<string>Main Message Title</string>
@@ -138,7 +152,7 @@
 			<key>default</key>
 			<string>Messages</string>
 			<key>placeholder</key>
-			<string>Enter Custom Title</string>
+			<string>Messages</string>
 			<key>keyboardType</key>
 			<string>Alphabet</string>
 			<key>autocapitalizationType</key>

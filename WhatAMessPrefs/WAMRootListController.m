@@ -5,7 +5,7 @@
 @implementation WAMRootListController {
 	NSString *_currentColorKey;
 }
- /* Essentially sets up prefences in Settings? */
+ /* Essentially sets up prefences in Settings, fetches plist */
 - (NSArray *)specifiers {
 	if (!_specifiers) {
 		_specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];

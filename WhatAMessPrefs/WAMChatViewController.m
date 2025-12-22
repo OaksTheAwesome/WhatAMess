@@ -1,13 +1,14 @@
 #import <Foundation/Foundation.h>
-#import "WAMConvListController.h"
+#import "WAMChatViewController.h"
 
-@implementation WAMConvListController {
+@implementation WAMChatViewController {
     NSString *_currentColorKey;
 }
 
+/* Loads specifiers from ChatView.plist. */
 - (NSArray *)specifiers {
 	if (!_specifiers) {
-		_specifiers = [self loadSpecifiersFromPlistName:@"ConvList" target:self];
+		_specifiers = [self loadSpecifiersFromPlistName:@"ChatView" target:self];
 	}
 
 	return _specifiers;
@@ -20,32 +21,8 @@
 
 
 /* Presents color picker and stores color to the indicated key in plist. */
-- (void)pickBackgroundColor {
-	_currentColorKey = @"convListBackgroundColor";
-	[self showColorPicker];
-}
-
-/* Presents color picker and stores color to the indicated key in plist. */
-- (void)pickCellColor {
-	_currentColorKey = @"convListCellColor";
-	[self showColorPicker];
-}
-
-/* Presents color picker and stores color to the indicated key in plist. */
-- (void)pickTitleColor {
-	_currentColorKey = @"titleTextColor";
-	[self showColorPicker];
-}
-
-/* Presents color picker and stores color to the indicated key in plist. */
-- (void)pickMessagePreviewColor {
-	_currentColorKey = @"messagePreviewTextColor";
-	[self showColorPicker];
-}
-
-/* Presents color picker and stores color to the indicated key in plist. */
-- (void)pickDateTimeColor {
-	_currentColorKey = @"dateTimeTextColor";
+- (void)pickChatBackgroundColor {
+	_currentColorKey = @"chatBackgroundColor";
 	[self showColorPicker];
 }
 
@@ -63,17 +40,7 @@ so the user can do just that, pick. */
 	if (hexColor) {
 		colorPicker.selectedColor = [self colorFromHex:hexColor];
 	} else {
-		if ([_currentColorKey isEqualToString:@"convListBackgroundColor"]) {
-			colorPicker.selectedColor = [UIColor blackColor];
-		} else if ([_currentColorKey isEqualToString:@"convListCellColor"]) {
-			colorPicker.selectedColor = [UIColor blackColor];
-		} else if ([_currentColorKey isEqualToString:@"titleTextColor"]) {
-			colorPicker.selectedColor = [UIColor whiteColor];
-		} else if ([_currentColorKey isEqualToString:@"messagePreviewTextColor"]) {
-			colorPicker.selectedColor = [UIColor grayColor];
-		} else if ([_currentColorKey isEqualToString:@"dateTimeTextColor"]) {
-			colorPicker.selectedColor = [UIColor grayColor];
-		}
+		colorPicker.selectedColor = [UIColor blackColor];
 	}
 	
 	[self presentViewController:colorPicker animated:YES completion:nil];
@@ -127,12 +94,6 @@ by 255, and returns. */
 	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
 }
 
-/* Prepares color picker and stores the key so the color picker knows what prefs to load/save. */
-- (void)openConversationListTitleColorPicker {
-	_currentColorKey = @"conversationListTitleColor";
-	[self showColorPicker];
-}
-
 
 /*====================
  IMAGE PICKER METHODS
@@ -142,7 +103,7 @@ by 255, and returns. */
 /* Creates an image picker to allow user to select image. Makes it open library, not camera. Presents as
 window on top of other view controllers. Then actually presents picker to user. Basically handles window.
 Ngl kinda had to rely heavily on ChatGPT here for help. */
-- (void)pickConvListBgImage {
+- (void)pickChatBgImage {
     UIImagePickerController *picker = [[UIImagePickerController alloc] init];
     picker.delegate = (id<UINavigationControllerDelegate, UIImagePickerControllerDelegate>)self;
     picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
@@ -170,7 +131,7 @@ or not written at all. Closes image picker after saving image to path. Posts an 
         withIntermediateDirectories:YES attributes:nil error:nil];
     }
 
-    NSString *path = [dirPath stringByAppendingPathComponent:@"background.jpg"];
+    NSString *path = [dirPath stringByAppendingPathComponent:@"chat_background.jpg"];
     NSData *data = UIImageJPEGRepresentation(image, 0.9);
     [data writeToFile:path atomically:YES];
 

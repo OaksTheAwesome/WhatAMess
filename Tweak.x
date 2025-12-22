@@ -157,7 +157,7 @@ CGFloat getImageBlurAmount() {
 
 CGFloat getChatImageBlurAmount() {
 	NSDictionary *prefs = loadPrefs();
-	return prefs[@"chatBlurAmount"] ? [prefs[@"chatBlurAmount"] floatValue] : 0.0;
+	return prefs[@"chatImageBlurAmount"] ? [prefs[@"chatImageBlurAmount"] floatValue] : 0.0;
 }
 
 /* Checks if input string is nil/empty. If it is, returns nil. If hex string has a leading "#", removes
@@ -253,16 +253,24 @@ UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
 	CIContext *context = [CIContext contextWithOptions:nil];
 	CIImage *inputImage = [CIImage imageWithCGImage:image.CGImage];
 
+	CIFilter *clampFilter = [CIFilter filterWithName:@"CIAffineClamp"];
+	[clampFilter setValue:inputImage forKey:kCIInputImageKey];
+	CIImage *clampedImage = [clampFilter outputImage];
+
 	CIFilter *blurFilter = [CIFilter filterWithName:@"CIGaussianBlur"];
-	[blurFilter setValue:inputImage forKey:kCIInputImageKey];
+	[blurFilter setValue:clampedImage forKey:kCIInputImageKey];
 	[blurFilter setValue:@(blurAmount) forKey:kCIInputRadiusKey];
 
 	CIImage *outputImage = [blurFilter outputImage];
 
 	CGRect extent = [inputImage extent];
-	outputImage = [outputImage imageByCroppingToRect:extent];
 
 	CGImageRef cgImage = [context createCGImage:outputImage fromRect:extent];
+
+	if (!cgImage) {
+		return image;
+	}
+
 	UIImage *blurredImage = [UIImage imageWithCGImage:cgImage scale:image.scale orientation:image.imageOrientation];
 	CGImageRelease(cgImage);
 
@@ -658,19 +666,23 @@ across messages app. Replaces the title with a custom user string and sets a cus
 }
 
 %end
-
+ 
+ /* Hides some views for color/image bg in chats. */
 %hook CKTranscriptCollectionViewController
 
 - (void)viewDidLoad {
     %orig;
 	self.view.backgroundColor = [UIColor clearColor];
 }
-
+/* There was this little weird black box around bubbles that I could never find for the life of me. Found "chatwall"
+by ChristopherA8 from back in the iOS 13/14 days and FINALLY found what made it go away. So special thanks for
+that and sparing my beginner-level sanity. Also steered me in the direction of what to hide. TYSM 4 open sourcing oml. */
 -(BOOL)shouldUseOpaqueMask{
 	return NO;
 }
 %end
 
+ /* Hides some views for color/image bg in chats. */
 %hook CKGradientReferenceView
 	
 -(void)setFrame:(CGRect)arg1 {
@@ -680,18 +692,30 @@ across messages app. Replaces the title with a custom user string and sets a cus
 
 %end
 
-
+/* Handles the image and color bg for in chats. Similar to the first hook in the list. Resuses some
+same things too, like the blur. */
 %hook CKMessagesController
 
--(void) viewDidLoad{
+-(void)viewDidLoad {
 	%orig;
+
+	if (!isTweakEnabled()) {
+		return;
+	}
 
 	self.view.backgroundColor = [UIColor clearColor];
 
 	BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
 	UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
 
-	if(!isTweakEnabled() && !isChatImageBgEnabled()) {
+	if (isChatColorBgEnabled()) {
+		UIView *colorView = [[UIView alloc] initWithFrame:self.view.bounds];
+		colorView.backgroundColor = getChatBackgroundColor();
+		colorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+		[self.view insertSubview:colorView atIndex:0];
+	}
+
+	else if (chatBgImage && isChatImageBgEnabled()) {
 		CGFloat blurAmount = getChatImageBlurAmount();
 		if (blurAmount > 0) {
 			chatBgImage = blurImage(chatBgImage, blurAmount);
@@ -704,6 +728,16 @@ across messages app. Replaces the title with a custom user string and sets a cus
 		imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 		[self.view insertSubview:imageView atIndex:0];
 	}
+
+	[[NSNotificationCenter defaultCenter] addObserver:self
+		selector:@selector(updateChatBackground)
+		name:kPrefsChangedNotification
+		object:nil];
+}
+
+-(void)dealloc {
+	[[NSNotificationCenter defaultCenter] removeObserver:self];
+	%orig;
 }
 
 %end

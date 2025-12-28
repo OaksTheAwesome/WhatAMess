@@ -26,6 +26,11 @@
 	[self showColorPicker];
 }
 
+- (void)pickSMSSentBubbleColor {
+    _currentColorKey = @"sentSMSBubbleColor";
+    [self showColorPicker];
+}
+
 - (void)pickSentBubbleColor {
     _currentColorKey = @"sentBubbleColor";
     [self showColorPicker];

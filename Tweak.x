@@ -340,32 +340,6 @@ static void logToFile(NSString *message) {
     }
 }
 
-/*static void findImageViewsInView(UIView *view, int depth) {
-    NSMutableString *indent = [NSMutableString string];
-    for (int i = 0; i < depth; i++) {
-        [indent appendString:@"  "];
-    }
-    
-    logToFile([NSString stringWithFormat:@"%@%@", indent, NSStringFromClass([view class])]);
-    
-    // Check if it's a CKBalloonImageView
-    if ([view isKindOfClass:NSClassFromString(@"CKBalloonImageView")]) {
-        logToFile([NSString stringWithFormat:@"%@>>> FOUND CKBalloonImageView! <<<", indent]);
-        
-        if ([view isKindOfClass:[UIImageView class]]) {
-            UIImageView *imgView = (UIImageView *)view;
-            logToFile([NSString stringWithFormat:@"%@  Has image: %@", indent, imgView.image ? @"YES" : @"NO"]);
-            if (imgView.image) {
-                logToFile([NSString stringWithFormat:@"%@  Rendering mode: %ld", indent, (long)imgView.image.renderingMode]);
-            }
-            logToFile([NSString stringWithFormat:@"%@  tintColor: %@", indent, imgView.tintColor]);
-        }
-    }
-    
-    for (UIView *subview in view.subviews) {
-        findImageViewsInView(subview, depth + 1);
-    }
-} */
 
 static UIColor *colorFromHexString(NSString *hexString) {
     // Remove any non-hex characters
@@ -384,6 +358,22 @@ static UIColor *colorFromHexString(NSString *hexString) {
                            green:((rgbValue & 0xFF00) >> 8)/255.0 
                             blue:(rgbValue & 0xFF)/255.0 
                            alpha:1.0];
+}
+
+static UIColor *getSMSSentBubbleColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"sentSMSBubbleColor"];
+    
+    logToFile([NSString stringWithFormat:@"getSMSSentBubbleColor - hex: %@", hexColor]);
+    
+    if (!hexColor) {
+        logToFile(@"No sent color set, returning default blue");
+        return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+    }
+    
+    UIColor *color = colorFromHexString(hexColor);
+    logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
+    return color;
 }
 
 static UIColor *getSentBubbleColor() {
@@ -417,6 +407,7 @@ static UIColor *getReceivedBubbleColor() {
     logToFile([NSString stringWithFormat:@"Returning received color: %@", color]);
     return color;
 } 
+
 /* ===========
     HOOKS 
 ============*/
@@ -850,7 +841,6 @@ same things too, like the blur. */
 %end
 
 %hook CKGradientView
-
 - (void)setColors:(NSArray *)colors {
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
         %orig;
@@ -875,6 +865,8 @@ same things too, like the blur. */
             targetColor = getReceivedBubbleColor();
         } else if (parentBalloon.color == 1) {
             targetColor = getSentBubbleColor();
+        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+            targetColor = getSMSSentBubbleColor();
         }
         
         if (targetColor) {
@@ -887,7 +879,6 @@ same things too, like the blur. */
     
     %orig;
 }
-
 - (void)didMoveToSuperview {
     %orig;
     
@@ -906,8 +897,14 @@ same things too, like the blur. */
         parent = parent.superview;
     }
     
-    if (parentBalloon && parentBalloon.color == 1) {
-        UIColor *sentColor = getSentBubbleColor();
+    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) { // Changed from 3 to 0
+        UIColor *sentColor = nil;
+        if (parentBalloon.color == 1) {
+            sentColor = getSentBubbleColor();
+        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+            sentColor = getSMSSentBubbleColor();
+        }
+        
         if (sentColor) {
             NSArray *customColors = @[sentColor, sentColor];
             [self setColors:customColors];
@@ -915,7 +912,6 @@ same things too, like the blur. */
         }
     }
 }
-
 - (void)layoutSubviews {
     %orig;
     
@@ -934,19 +930,26 @@ same things too, like the blur. */
         parent = parent.superview;
     }
     
-    if (parentBalloon && parentBalloon.color == 1) {
-        UIColor *sentColor = getSentBubbleColor();
-        NSArray *currentColors = [self colors];
+    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) { // Changed from 3 to 0
+        UIColor *sentColor = nil;
+        if (parentBalloon.color == 1) {
+            sentColor = getSentBubbleColor();
+        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+            sentColor = getSMSSentBubbleColor();
+        }
         
-        // Only update if colors don't match
-        if (currentColors.count > 0 && ![currentColors[0] isEqual:sentColor]) {
-            NSArray *customColors = @[sentColor, sentColor];
-            [self setColors:customColors];
-            logToFile(@"Fixed blue bubble in layoutSubviews");
+        if (sentColor) {
+            NSArray *currentColors = [self colors];
+            
+            // Only update if colors don't match
+            if (currentColors.count > 0 && ![currentColors[0] isEqual:sentColor]) {
+                NSArray *customColors = @[sentColor, sentColor];
+                [self setColors:customColors];
+                logToFile(@"Fixed bubble in layoutSubviews");
+            }
         }
     }
 }
-
 %end
 
 %hook CKBalloonImageView

@@ -106,9 +106,17 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Sent Messages</string>
+			<string>Sent iMessages</string>
 			<key>action</key>
 			<string>pickSentBubbleColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Sent SMS Messages</string>
+			<key>action</key>
+			<string>pickSMSSentBubbleColor</string>
 		</dict>
 	</array>
 	<key>title</key>

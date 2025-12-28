@@ -80,7 +80,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Message Bubble Colors</string>
+			<string>Message Bubbles</string>
 		</dict>
 		<dict>
    			<key>cell</key>
@@ -117,6 +117,38 @@
 			<string>Sent SMS Messages</string>
 			<key>action</key>
 			<string>pickSMSSentBubbleColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Received Text Color</string>
+    		<key>action</key>
+    		<string>pickReceivedTextColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Sent iMessage Text Color</string>
+    		<key>action</key>
+    		<string>pickSentTextColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Sent SMS Text Color</string>
+    		<key>action</key>
+    		<string>pickSMSSentTextColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Timestamp Colors</string>
+    		<key>action</key>
+    		<string>pickTimestampTextColor</string>
 		</dict>
 	</array>
 	<key>title</key>

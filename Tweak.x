@@ -68,7 +68,14 @@ inherits attributes from UILabel*/
 @property (nonatomic, assign) int color;
 @end
 
-@interface CKBalloonTextView : UIView
+@interface CKBalloonTextView : UITextView
+- (void)updateTextColorForBalloon;
+@end
+
+@interface CKTranscriptStatusCell : UICollectionViewCell
+@end
+
+@interface CKTranscriptLabelCell : UICollectionViewCell
 @end
 
 /* ===================
@@ -340,26 +347,6 @@ static void logToFile(NSString *message) {
     }
 }
 
-
-static UIColor *colorFromHexString(NSString *hexString) {
-    // Remove any non-hex characters
-    hexString = [hexString stringByReplacingOccurrencesOfString:@"#" withString:@""];
-    
-    // Ensure it's only 6 characters
-    if (hexString.length > 6) {
-        hexString = [hexString substringToIndex:6];
-    }
-    
-    unsigned rgbValue = 0;
-    NSScanner *scanner = [NSScanner scannerWithString:hexString];
-    [scanner scanHexInt:&rgbValue];
-    
-    return [UIColor colorWithRed:((rgbValue & 0xFF0000) >> 16)/255.0 
-                           green:((rgbValue & 0xFF00) >> 8)/255.0 
-                            blue:(rgbValue & 0xFF)/255.0 
-                           alpha:1.0];
-}
-
 static UIColor *getSMSSentBubbleColor() {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
     NSString *hexColor = prefs[@"sentSMSBubbleColor"];
@@ -371,7 +358,7 @@ static UIColor *getSMSSentBubbleColor() {
         return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
     }
     
-    UIColor *color = colorFromHexString(hexColor);
+    UIColor *color = colorFromHex(hexColor);
     logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
     return color;
 }
@@ -387,7 +374,7 @@ static UIColor *getSentBubbleColor() {
         return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
     }
     
-    UIColor *color = colorFromHexString(hexColor);
+    UIColor *color = colorFromHex(hexColor);
     logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
     return color;
 }
@@ -403,10 +390,54 @@ static UIColor *getReceivedBubbleColor() {
         return [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
     }
     
-    UIColor *color = colorFromHexString(hexColor);
+    UIColor *color = colorFromHex(hexColor);
     logToFile([NSString stringWithFormat:@"Returning received color: %@", color]);
     return color;
 } 
+
+static UIColor *getReceivedTextColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"receivedTextColor"];
+    
+    if (!hexColor) {
+        return nil; // Return nil to use default
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getSentTextColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"sentTextColor"];
+    
+    if (!hexColor) {
+        return nil;
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getSMSSentTextColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"sentSMSTextColor"];
+    
+    if (!hexColor) {
+        return nil;
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *pickTimestampTextColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"timestampTextColor"];
+    
+    if (!hexColor) {
+        return nil; // Use default color
+    }
+    
+    return colorFromHex(hexColor);
+}
 
 /* ===========
     HOOKS 
@@ -577,15 +608,14 @@ changes.*/
 
 /* Modifies labels. */
 %hook UILabel
- 
- /* Overrides label color when inside a cell. Checks label types and applies accoring colors from prefs.
- Ensures all labels in cells follow tweak's color settings. */
+
 - (void)setTextColor:(UIColor *)color {
     if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
         %orig;
         return;
     }
-
+    
+    // First check conversation list cells
     UIView *superview = self.superview;
     BOOL isInConversationCell = NO;
     while (superview) {
@@ -595,7 +625,6 @@ changes.*/
         }
         superview = superview.superview;
     }
-
     if (isInConversationCell) {
         if ([self isKindOfClass:%c(CKLabel)]) {
             %orig(getTitleTextColor());
@@ -608,6 +637,23 @@ changes.*/
 		}
 		return;
     }
+    
+    // Then check timestamp cells (only if NOT in conversation cell)
+    UIView *parent = self.superview;
+    int levels = 0;
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)] || [parent isKindOfClass:%c(CKTranscriptLabelCell)]) {
+            UIColor *timestampColor = pickTimestampTextColor();
+            if (timestampColor) {
+                %orig(timestampColor);
+                return;
+            }
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
 	%orig;
 }
 
@@ -998,4 +1044,142 @@ same things too, like the blur. */
     }
     %orig;
 }
+%end
+
+%hook CKBalloonTextView
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    if (!self.superview) {
+        return;
+    }
+    
+    [self updateTextColorForBalloon];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    [self updateTextColorForBalloon];
+}
+
+- (void)setText:(NSString *)text {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    [self updateTextColorForBalloon];
+}
+
+- (void)setAttributedText:(NSAttributedString *)attributedText {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    [self updateTextColorForBalloon];
+}
+
+%new
+- (void)updateTextColorForBalloon {
+    // Search for CKTextBalloonView (which inherits from CKColoredBalloonView)
+    CKColoredBalloonView *balloonView = nil;
+    UIView *parent = self.superview;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
+            balloonView = (CKColoredBalloonView *)parent;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (balloonView) {
+        UIColor *textColor = nil;
+        
+        if (balloonView.color == -1) {
+            textColor = getReceivedTextColor();
+        } else if (balloonView.color == 1) {
+            textColor = getSentTextColor();
+        } else if (balloonView.color == 0) {
+            textColor = getSMSSentTextColor();
+        }
+        
+        if (textColor && ![self.textColor isEqual:textColor]) {
+            self.textColor = textColor;
+        }
+    }
+}
+
+%end
+
+%hook CKTranscriptStatusCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *timestampColor = pickTimestampTextColor();
+    if (!timestampColor) {
+        return;
+    }
+    
+    // The UILabel is a direct child of contentView
+    for (UIView *subview in self.contentView.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = timestampColor;
+            logToFile([NSString stringWithFormat:@"Set timestamp color to label: %@", label.text]);
+        }
+    }
+}
+
+%end
+
+%hook CKTranscriptLabelCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Make sure we're in a chat view, not conversation list
+    UIViewController *vc = [self _viewControllerForAncestor];
+    if (![vc isKindOfClass:%c(CKTranscriptCollectionViewController)]) {
+        return;
+    }
+    
+    UIColor *timestampColor = pickTimestampTextColor();
+    if (!timestampColor) {
+        return;
+    }
+    
+    // The UILabel is a direct child of contentView
+    for (UIView *subview in self.contentView.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = timestampColor;
+        }
+    }
+}
+
 %end

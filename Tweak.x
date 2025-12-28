@@ -55,24 +55,20 @@ inherits attributes from UILabel*/
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
 @end
 
-@interface CKColoredBalloonView : UIView
-@property (nonatomic, assign) int color;
-- (id)balloonDescriptor;
-@end
-
-@interface CKTextBalloonView : CKColoredBalloonView
-@end
-
 @interface CKGradientView : UIView
 - (void)setColors:(NSArray *)colors;
 - (NSArray *)colors;
 @end
 
-@interface CKBalloonImageView : UIView
+@interface CKBalloonImageView : UIImageView
+@property (nonatomic, strong) UIImage *image;
 @end
 
-@interface CKBalloonDescriptor : NSObject
-@property (nonatomic, strong) UIColor *balloonColor;
+@interface CKColoredBalloonView : UIView
+@property (nonatomic, assign) int color;
+@end
+
+@interface CKBalloonTextView : UIView
 @end
 
 /* ===================
@@ -333,6 +329,7 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+
 static NSString *prefsPath = @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist";
 
 static void logToFile(NSString *message) {
@@ -342,6 +339,33 @@ static void logToFile(NSString *message) {
         fclose(logFile);
     }
 }
+
+/*static void findImageViewsInView(UIView *view, int depth) {
+    NSMutableString *indent = [NSMutableString string];
+    for (int i = 0; i < depth; i++) {
+        [indent appendString:@"  "];
+    }
+    
+    logToFile([NSString stringWithFormat:@"%@%@", indent, NSStringFromClass([view class])]);
+    
+    // Check if it's a CKBalloonImageView
+    if ([view isKindOfClass:NSClassFromString(@"CKBalloonImageView")]) {
+        logToFile([NSString stringWithFormat:@"%@>>> FOUND CKBalloonImageView! <<<", indent]);
+        
+        if ([view isKindOfClass:[UIImageView class]]) {
+            UIImageView *imgView = (UIImageView *)view;
+            logToFile([NSString stringWithFormat:@"%@  Has image: %@", indent, imgView.image ? @"YES" : @"NO"]);
+            if (imgView.image) {
+                logToFile([NSString stringWithFormat:@"%@  Rendering mode: %ld", indent, (long)imgView.image.renderingMode]);
+            }
+            logToFile([NSString stringWithFormat:@"%@  tintColor: %@", indent, imgView.tintColor]);
+        }
+    }
+    
+    for (UIView *subview in view.subviews) {
+        findImageViewsInView(subview, depth + 1);
+    }
+} */
 
 static UIColor *colorFromHexString(NSString *hexString) {
     // Remove any non-hex characters
@@ -825,7 +849,6 @@ same things too, like the blur. */
 
 %end
 
-
 %hook CKGradientView
 
 - (void)setColors:(NSArray *)colors {
@@ -924,4 +947,52 @@ same things too, like the blur. */
     }
 }
 
+%end
+
+%hook CKBalloonImageView
+- (void)setImage:(UIImage *)image {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) {
+        %orig;
+        return;
+    }
+    if ([self isKindOfClass:%c(CKColoredBalloonView)]) {
+        CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
+        if (coloredSelf.color == -1) { // Received message
+            UIColor *receivedColor = getReceivedBubbleColor();
+            if (receivedColor) {
+                UIImageRenderingMode originalMode = image.renderingMode;
+                UIEdgeInsets capInsets = image.capInsets;
+                UIImageResizingMode resizingMode = image.resizingMode;
+                UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
+                CGFloat scale = image.scale;
+                
+                UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
+                CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
+                
+                // Draw original image first
+                [image drawInRect:rect];
+                
+                // Overlay tint color
+                [receivedColor setFill];
+                UIRectFillUsingBlendMode(rect, kCGBlendModeSourceAtop);
+                
+                UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                
+                // Adjust alignment insets - balance left and right
+                alignmentInsets.left += 6.0;
+                alignmentInsets.right -= 8.0; // Give more room on the right
+                
+                // Restore all properties in the correct order
+                tintedImage = [tintedImage resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
+                tintedImage = [tintedImage imageWithAlignmentRectInsets:alignmentInsets];
+                tintedImage = [tintedImage imageWithRenderingMode:originalMode];
+                
+                %orig(tintedImage);
+                return;
+            }
+        }
+    }
+    %orig;
+}
 %end

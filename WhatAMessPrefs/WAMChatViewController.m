@@ -26,6 +26,16 @@
 	[self showColorPicker];
 }
 
+- (void)pickSentBubbleColor {
+    _currentColorKey = @"sentBubbleColor";
+    [self showColorPicker];
+}
+
+- (void)pickReceivedBubbleColor {
+    _currentColorKey = @"receivedBubbleColor";
+    [self showColorPicker];
+}
+
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,
 converts it from hex string to UIColor. If no saved color, falls back to indicated default. Presents the picker
@@ -66,14 +76,48 @@ writes the changes immediately to the disk. Posts an update notification to appl
 /* Retrieves RGB and alpha from a UIColor, and converts each component from 0-1 to 0-255, the hex format.
 Formats those ints as a hex string with a leading "#" while ensuring two digits/component.*/
 - (NSString *)hexFromColor:(UIColor *)color {
-	CGFloat red, green, blue, alpha;
-	[color getRed:&red green:&green blue:&blue alpha:&alpha];
-	
-	int r = (int)(red * 255);
-	int g = (int)(green * 255);
-	int b = (int)(blue * 255);
-	
-	return [NSString stringWithFormat:@"#%02X%02X%02X", r, g, b];
+    // Convert to RGB color space first to ensure consistent results
+    CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
+    CGColorRef rgbColor = CGColorCreateCopyByMatchingToColorSpace(
+        rgbColorSpace,
+        kCGRenderingIntentDefault,
+        color.CGColor,
+        NULL
+    );
+    
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    
+    if (rgbColor) {
+        const CGFloat *components = CGColorGetComponents(rgbColor);
+        size_t componentCount = CGColorGetNumberOfComponents(rgbColor);
+        
+        if (componentCount >= 3) {
+            red = components[0];
+            green = components[1];
+            blue = components[2];
+        }
+        
+        CGColorRelease(rgbColor);
+    } else {
+        // Fallback to getRed:green:blue:alpha:
+        [color getRed:&red green:&green blue:&blue alpha:&alpha];
+    }
+    
+    CGColorSpaceRelease(rgbColorSpace);
+    
+    int r = (int)(red * 255.0);
+    int g = (int)(green * 255.0);
+    int b = (int)(blue * 255.0);
+    
+    // Clamp values to 0-255 range
+    r = MAX(0, MIN(255, r));
+    g = MAX(0, MIN(255, g));
+    b = MAX(0, MIN(255, b));
+    
+    NSString *hexString = [NSString stringWithFormat:@"#%02X%02X%02X", r, g, b];
+    NSLog(@"WhatAMess: Converting color to hex: %@", hexString);
+    
+    return hexString;
 }
 
 /* Opposite, converts hex string to ints for a UIColor. Strips the "#" and converts. Extracts RGB, divides

@@ -1,5 +1,5 @@
 #import <UIKit/UIKit.h>
-
+#import <objc/runtime.h>
 
 /*Interfaces, declare to hook certain things. Ex: Want to change label colors, hook CKLabel,
 inherits attributes from UILabel*/
@@ -55,6 +55,25 @@ inherits attributes from UILabel*/
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
 @end
 
+@interface CKColoredBalloonView : UIView
+@property (nonatomic, assign) int color;
+- (id)balloonDescriptor;
+@end
+
+@interface CKTextBalloonView : CKColoredBalloonView
+@end
+
+@interface CKGradientView : UIView
+- (void)setColors:(NSArray *)colors;
+- (NSArray *)colors;
+@end
+
+@interface CKBalloonImageView : UIView
+@end
+
+@interface CKBalloonDescriptor : NSObject
+@property (nonatomic, strong) UIColor *balloonColor;
+@end
 
 /* ===================
   PREFERENCE THINGS 
@@ -146,6 +165,11 @@ BOOL isChatImageBgEnabled() {
 BOOL isCustomTextColorsEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isCustomTextColorsEnabled"] ? [prefs[@"isCustomTextColorsEnabled"] boolValue] : NO;
+}
+
+BOOL isCustomBubbleColorsEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isCustomBubbleColorsEnabled"] ? [prefs[@"isCustomBubbleColorsEnabled"] boolValue] : NO;
 }
 
 /* Checks the amount of blur to apply to image based on user slider input. 
@@ -309,7 +333,66 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+static NSString *prefsPath = @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist";
 
+static void logToFile(NSString *message) {
+    FILE *logFile = fopen("/var/jb/var/mobile/whatamess_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "%s\n", [message UTF8String]);
+        fclose(logFile);
+    }
+}
+
+static UIColor *colorFromHexString(NSString *hexString) {
+    // Remove any non-hex characters
+    hexString = [hexString stringByReplacingOccurrencesOfString:@"#" withString:@""];
+    
+    // Ensure it's only 6 characters
+    if (hexString.length > 6) {
+        hexString = [hexString substringToIndex:6];
+    }
+    
+    unsigned rgbValue = 0;
+    NSScanner *scanner = [NSScanner scannerWithString:hexString];
+    [scanner scanHexInt:&rgbValue];
+    
+    return [UIColor colorWithRed:((rgbValue & 0xFF0000) >> 16)/255.0 
+                           green:((rgbValue & 0xFF00) >> 8)/255.0 
+                            blue:(rgbValue & 0xFF)/255.0 
+                           alpha:1.0];
+}
+
+static UIColor *getSentBubbleColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"sentBubbleColor"];
+    
+    logToFile([NSString stringWithFormat:@"getSentBubbleColor - hex: %@", hexColor]);
+    
+    if (!hexColor) {
+        logToFile(@"No sent color set, returning default blue");
+        return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+    }
+    
+    UIColor *color = colorFromHexString(hexColor);
+    logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
+    return color;
+}
+
+static UIColor *getReceivedBubbleColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSString *hexColor = prefs[@"receivedBubbleColor"];
+    
+    logToFile([NSString stringWithFormat:@"getReceivedBubbleColor - hex: %@", hexColor]);
+    
+    if (!hexColor) {
+        logToFile(@"No received color set, returning default gray");
+        return [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    }
+    
+    UIColor *color = colorFromHexString(hexColor);
+    logToFile([NSString stringWithFormat:@"Returning received color: %@", color]);
+    return color;
+} 
 /* ===========
     HOOKS 
 ============*/
@@ -738,6 +821,107 @@ same things too, like the blur. */
 -(void)dealloc {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	%orig;
+}
+
+%end
+
+
+%hook CKGradientView
+
+- (void)setColors:(NSArray *)colors {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Find parent balloon
+    CKColoredBalloonView *parentBalloon = nil;
+    UIView *parent = self.superview;
+    while (parent) {
+        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
+            parentBalloon = (CKColoredBalloonView *)parent;
+            break;
+        }
+        parent = parent.superview;
+    }
+    
+    if (parentBalloon) {
+        UIColor *targetColor = nil;
+        
+        if (parentBalloon.color == -1) {
+            targetColor = getReceivedBubbleColor();
+        } else if (parentBalloon.color == 1) {
+            targetColor = getSentBubbleColor();
+        }
+        
+        if (targetColor) {
+            // Replace the colors array with our custom color
+            NSArray *customColors = @[targetColor, targetColor];
+            %orig(customColors);
+            return;
+        }
+    }
+    
+    %orig;
+}
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Force color update immediately when added to view hierarchy
+    CKColoredBalloonView *parentBalloon = nil;
+    UIView *parent = self.superview;
+    while (parent) {
+        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
+            parentBalloon = (CKColoredBalloonView *)parent;
+            break;
+        }
+        parent = parent.superview;
+    }
+    
+    if (parentBalloon && parentBalloon.color == 1) {
+        UIColor *sentColor = getSentBubbleColor();
+        if (sentColor) {
+            NSArray *customColors = @[sentColor, sentColor];
+            [self setColors:customColors];
+            logToFile(@"Forced color update in didMoveToSuperview");
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Also force on layout
+    CKColoredBalloonView *parentBalloon = nil;
+    UIView *parent = self.superview;
+    while (parent) {
+        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
+            parentBalloon = (CKColoredBalloonView *)parent;
+            break;
+        }
+        parent = parent.superview;
+    }
+    
+    if (parentBalloon && parentBalloon.color == 1) {
+        UIColor *sentColor = getSentBubbleColor();
+        NSArray *currentColors = [self colors];
+        
+        // Only update if colors don't match
+        if (currentColors.count > 0 && ![currentColors[0] isEqual:sentColor]) {
+            NSArray *customColors = @[sentColor, sentColor];
+            [self setColors:customColors];
+            logToFile(@"Fixed blue bubble in layoutSubviews");
+        }
+    }
 }
 
 %end

@@ -78,6 +78,18 @@ inherits attributes from UILabel*/
 @interface CKTranscriptLabelCell : UICollectionViewCell
 @end
 
+@interface _UIVisualEffectContentView : UIView
+@end
+
+@interface _UIVisualEffectSubview : UIView
+@end
+
+@interface CKMessageEntryView : UIView
+@end
+
+@interface UIKBVisualEffectView : UIVisualEffectView
+@end
+
 /* ===================
   PREFERENCE THINGS 
 ==================== */
@@ -336,9 +348,6 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
-
-static NSString *prefsPath = @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist";
-
 static void logToFile(NSString *message) {
     FILE *logFile = fopen("/var/jb/var/mobile/whatamess_debug.log", "a");
     if (logFile) {
@@ -348,7 +357,7 @@ static void logToFile(NSString *message) {
 }
 
 static UIColor *getSMSSentBubbleColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentSMSBubbleColor"];
     
     logToFile([NSString stringWithFormat:@"getSMSSentBubbleColor - hex: %@", hexColor]);
@@ -364,7 +373,7 @@ static UIColor *getSMSSentBubbleColor() {
 }
 
 static UIColor *getSentBubbleColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentBubbleColor"];
     
     logToFile([NSString stringWithFormat:@"getSentBubbleColor - hex: %@", hexColor]);
@@ -380,7 +389,7 @@ static UIColor *getSentBubbleColor() {
 }
 
 static UIColor *getReceivedBubbleColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"receivedBubbleColor"];
     
     logToFile([NSString stringWithFormat:@"getReceivedBubbleColor - hex: %@", hexColor]);
@@ -396,7 +405,7 @@ static UIColor *getReceivedBubbleColor() {
 } 
 
 static UIColor *getReceivedTextColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"receivedTextColor"];
     
     if (!hexColor) {
@@ -407,7 +416,7 @@ static UIColor *getReceivedTextColor() {
 }
 
 static UIColor *getSentTextColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentTextColor"];
     
     if (!hexColor) {
@@ -418,7 +427,7 @@ static UIColor *getSentTextColor() {
 }
 
 static UIColor *getSMSSentTextColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentSMSTextColor"];
     
     if (!hexColor) {
@@ -429,7 +438,7 @@ static UIColor *getSMSSentTextColor() {
 }
 
 static UIColor *pickTimestampTextColor() {
-    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:prefsPath];
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"timestampTextColor"];
     
     if (!hexColor) {
@@ -720,11 +729,11 @@ top to bottom. */
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
     maskLayer.frame = blurView.bounds;
     maskLayer.colors = @[
-        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
-		(id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
-		(id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor
+        (id)[UIColor colorWithWhite:1 alpha:1.0].CGColor,
+        (id)[UIColor colorWithWhite:1 alpha:0.9].CGColor,
+		(id)[UIColor colorWithWhite:1 alpha:0.55].CGColor,
+		(id)[UIColor colorWithWhite:1 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor
     ];
     maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
     blurView.layer.mask = maskLayer;
@@ -1182,4 +1191,207 @@ same things too, like the blur. */
     }
 }
 
+%end
+
+
+%hook _UIVisualEffectBackdropView
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in the message input area BUT NOT the keyboard
+    UIView *parent = self.superview;
+    UIVisualEffectView *effectView = nil;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:[UIVisualEffectView class]] && !effectView) {
+            effectView = (UIVisualEffectView *)parent;
+        }
+        // Check if we're in keyboard first
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isInMessageInput || isInKeyboard || !effectView) {
+        return;
+    }
+    
+    // Expand the effect view frame upward by 55 points
+    CGRect expandedFrame = effectView.frame;
+    expandedFrame.origin.y -= 120;
+    expandedFrame.size.height += 120;
+    effectView.frame = expandedFrame;
+    
+    // Apply gradient blur to message bar only
+    UIBlurEffect *customBlur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    effectView.effect = customBlur;
+    self.alpha = 1.0;
+    
+    // Apply gradient mask
+    CAGradientLayer *maskLayer = [CAGradientLayer layer];
+    maskLayer.frame = self.bounds;
+    maskLayer.colors = @[
+        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor
+    ];
+    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
+    self.layer.mask = maskLayer;
+}
+%end
+
+
+%hook _UIVisualEffectContentView
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in the message input area BUT NOT the keyboard
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        self.backgroundColor = [UIColor clearColor];
+        self.layer.mask = nil;
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in the message input area
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        %orig([UIColor clearColor]);
+        return;
+    }
+    
+    %orig;
+}
+%end
+
+%hook _UIVisualEffectSubview
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in the message input area BUT NOT the keyboard
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        self.backgroundColor = [UIColor clearColor];
+        self.layer.mask = nil;
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in the message input area
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        %orig([UIColor clearColor]);
+        return;
+    }
+    
+    %orig;
+}
 %end

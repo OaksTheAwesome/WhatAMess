@@ -85,10 +85,21 @@ inherits attributes from UILabel*/
 @end
 
 @interface CKMessageEntryView : UIView
+- (void)applyInputFieldCustomization;
+- (UITextView *)findTextView:(UIView *)view;
+- (UIView *)findRoundedView:(UIView *)view;
+- (UIView *)findViewByClassName:(UIView *)view;
 @end
 
 @interface UIKBVisualEffectView : UIVisualEffectView
 @end
+
+@interface CKMessageEntryRichTextView : UITextView
+@end
+
+@interface CKEntryViewButton : UIView
+@end
+
 
 /* ===================
   PREFERENCE THINGS 
@@ -187,6 +198,37 @@ BOOL isCustomBubbleColorsEnabled() {
 	return prefs[@"isCustomBubbleColorsEnabled"] ? [prefs[@"isCustomBubbleColorsEnabled"] boolValue] : NO;
 }
 
+BOOL isModernMessageBarEnabled() {
+	NSDictionary *prefs = loadPrefs();
+	return prefs[@"isModernMessageBarEnabled"] ? [prefs[@"isModernMessageBarEnabled"] boolValue] : YES;
+}
+
+BOOL isInputFieldCustomizationEnabled() {
+	NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    return prefs[@"isInputFieldCustomizationEnabled"] ? [prefs[@"isInputFieldCustomizationEnabled"] boolValue] : YES;
+}
+
+BOOL isInputFieldBlurEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isInputFieldBlurEnabled"] ? [prefs[@"isInputFieldBlurEnabled"] boolValue] : NO;
+}
+
+BOOL isPlaceholderCustomizationEnabled() {
+    NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    if (prefs && prefs[@"isPlaceholderCustomizationEnabled"]) {
+        return [prefs[@"isPlaceholderCustomizationEnabled"] boolValue];
+    }
+    return NO;
+}
+
+BOOL isMessageInputTextEnabled() {
+	NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    if (prefs && prefs[@"isMessageInputTextEnabled"]) {
+        return [prefs[@"isMessageInputTextEnabled"] boolValue];
+    }
+    return NO;
+}
+
 /* Checks the amount of blur to apply to image based on user slider input. 
 Uses loadPrefs, defaults to 0.0 (no blurring). */
 CGFloat getImageBlurAmount() {
@@ -203,21 +245,52 @@ CGFloat getChatImageBlurAmount() {
 that and ensures scanner only sees hex digits. Converts the hex string to an int. NSScanner parses string
 into a numeric value. Then extracts RGB components and returns a useable UIColor. */
 UIColor *colorFromHex(NSString *hexString) {
-	if (!hexString || [hexString length] == 0) return nil;
+    if (!hexString || [hexString length] == 0) return nil;
 
-	if ([hexString hasPrefix:@"#"]) {
-		hexString = [hexString substringFromIndex:1];
-	}
+    if ([hexString hasPrefix:@"#"]) {
+        hexString = [hexString substringFromIndex:1];
+    }
 
-	unsigned int hex = 0;
-	NSScanner *scanner = [NSScanner scannerWithString:hexString];
-	[scanner scanHexInt:&hex];
-
-	CGFloat r = ((hex >> 16) & 0xFF) / 255.0;
-	CGFloat g = ((hex >> 8) & 0xFF) / 255.0;
-	CGFloat b = (hex & 0xFF) / 255.0;
-
-	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    CGFloat r, g, b, a;
+    
+    if (hexString.length == 8) {
+        // RRGGBBAA format - parse each component separately
+        NSString *rStr = [hexString substringWithRange:NSMakeRange(0, 2)];
+        NSString *gStr = [hexString substringWithRange:NSMakeRange(2, 2)];
+        NSString *bStr = [hexString substringWithRange:NSMakeRange(4, 2)];
+        NSString *aStr = [hexString substringWithRange:NSMakeRange(6, 2)];
+        
+        unsigned int rInt, gInt, bInt, aInt;
+        [[NSScanner scannerWithString:rStr] scanHexInt:&rInt];
+        [[NSScanner scannerWithString:gStr] scanHexInt:&gInt];
+        [[NSScanner scannerWithString:bStr] scanHexInt:&bInt];
+        [[NSScanner scannerWithString:aStr] scanHexInt:&aInt];
+        
+        r = rInt / 255.0;
+        g = gInt / 255.0;
+        b = bInt / 255.0;
+        a = aInt / 255.0;
+    } else if (hexString.length == 6) {
+        // RRGGBB format
+        NSString *rStr = [hexString substringWithRange:NSMakeRange(0, 2)];
+        NSString *gStr = [hexString substringWithRange:NSMakeRange(2, 2)];
+        NSString *bStr = [hexString substringWithRange:NSMakeRange(4, 2)];
+        
+        unsigned int rInt, gInt, bInt;
+        [[NSScanner scannerWithString:rStr] scanHexInt:&rInt];
+        [[NSScanner scannerWithString:gStr] scanHexInt:&gInt];
+        [[NSScanner scannerWithString:bStr] scanHexInt:&bInt];
+        
+        r = rInt / 255.0;
+        g = gInt / 255.0;
+        b = bInt / 255.0;
+        a = 1.0;
+    } else {
+        // Invalid format
+        return nil;
+    }
+    
+    return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
 /* Loads prefs, reads background color hex from prefs string "convListBackgroundColor". Converts to 
@@ -274,6 +347,29 @@ UIColor *getConversationListTitleColor() {
 	NSString *colorString = prefs[@"conversationListTitleColor"];
 	UIColor *color = colorFromHex(colorString);
 	return color ?: [UIColor whiteColor];
+}
+
+UIColor *getInputFieldBackgroundColor() {
+    NSDictionary *prefs = loadPrefs();
+    NSString *colorString = prefs[@"inputFieldBackgroundColor"];
+    UIColor *color = colorFromHex(colorString);
+	return color ?: [UIColor whiteColor];
+}
+
+UIBlurEffectStyle getInputFieldBlurStyle() {
+    NSDictionary *prefs = loadPrefs();
+    NSString *style = prefs[@"inputFieldBlurStyle"] ?: @"regular";
+    
+    if ([style isEqualToString:@"light"]) {
+        return UIBlurEffectStyleLight;
+    } else if ([style isEqualToString:@"dark"]) {
+        return UIBlurEffectStyleDark;
+    } else if ([style isEqualToString:@"ultraThinLight"]) {
+        return UIBlurEffectStyleSystemUltraThinMaterialLight;
+    } else if ([style isEqualToString:@"ultraThinDark"]) {
+        return UIBlurEffectStyleSystemUltraThinMaterialDark;
+    }
+    return UIBlurEffectStyleRegular;
 }
 
 /* Gets text input from user to override "Messages" title. Defaults to stock title otherwise. */
@@ -448,10 +544,86 @@ static UIColor *pickTimestampTextColor() {
     return colorFromHex(hexColor);
 }
 
+static UIColor *getSystemTintColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"systemTintColor"];
+    
+    if (!hexColor) {
+        return nil; // Use default system blue
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getPlaceholderTextColor() {
+    NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"placeholderTextColor"];
+    if (hexColor) {
+        return colorFromHex(hexColor);
+    }
+    return [UIColor grayColor];
+}
+
+static NSString *getPlaceholderText() {
+    NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    NSString *text = prefs[@"placeholderText"];
+    if (text && text.length > 0) {
+        return text;
+    }
+    return nil;
+}
+
+static UIColor *getMessageInputTextColor() {
+    NSDictionary *prefs = [[NSDictionary alloc] initWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"messageInputTextColor"];
+    if (hexColor) {
+        return colorFromHex(hexColor);
+    }
+    return [UIColor whiteColor];
+}
+
 /* ===========
     HOOKS 
 ============*/
 
+/* System tint color. */
+%hook UIView
+- (UIColor *)tintColor {
+    if (!isTweakEnabled()) {
+        return %orig;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        // Check if we're in the search bar or keyboard
+        UIView *parent = self.superview;
+        int levels = 0;
+        
+        while (parent && levels < 7) {
+            // Exclude search bar elements
+            if ([parent isKindOfClass:%c(_UISearchBarSearchFieldBackgroundView)] ||
+                [parent isKindOfClass:%c(UISearchBar)]) {
+                return %orig;
+            }
+            
+            // Exclude keyboard elements
+            if ([parent isKindOfClass:%c(UIKBVisualEffectView)] ||
+                [parent isKindOfClass:%c(UIInputView)] ||
+                [NSStringFromClass([parent class]) containsString:@"Keyboard"] ||
+                [NSStringFromClass([parent class]) containsString:@"UIKBInputBackdropView"]) {
+                return %orig;
+            }
+            
+            parent = parent.superview;
+            levels++;
+        }
+        
+        return customTint;
+    }
+    
+    return %orig;
+}
+%end
 
 /* Main view controller for Messages conversation list view. Everything inside modifies appearance. */
 %hook CKConversationListCollectionViewController
@@ -672,31 +844,67 @@ changes.*/
 text colors are enabled. Checks if image view is inside CKConvListCollectionViewConvCell. If in such cell,
 sets tint color, if not, calls original method.*/
 %hook UIImageView
-
--(void)setTintColor:(UIColor *)color {
-	if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
-		%orig;
-		return;
-	}
-
-	UIView *superview = self.superview;
-	BOOL isInConversationCell = NO;
-	while (superview) {
-		if ([superview isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]) {
-			isInConversationCell = YES;
-			break;
-		}
-		superview = superview.superview;
-	}
-
-	if (!isInConversationCell) {
-		%orig;
-		return;
-	}
-
-	%orig(getDateTimeTextColor());
+- (void)setTintColor:(UIColor *)color {
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        %orig;
+        return;
+    }
+    
+    UIView *superview = self.superview;
+    BOOL isInConversationCell = NO;
+    
+    while (superview) {
+        if ([superview isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]) {
+            isInConversationCell = YES;
+            break;
+        }
+        superview = superview.superview;
+    }
+    
+    if (!isInConversationCell) {
+        %orig;
+        return;
+    }
+    
+    %orig(getDateTimeTextColor());
 }
 
+- (void)setImage:(UIImage *)image {
+    %orig;
+    
+    if (!isTweakEnabled() || !image) {
+        return;
+    }
+    
+    // Check if this is an unread indicator in conversation list
+    UIView *parent = self.superview;
+    BOOL isUnreadIndicator = NO;
+    int levels = 0;
+    
+    while (parent && levels < 5) {
+        if ([parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
+            isUnreadIndicator = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isUnreadIndicator) {
+        // Only apply to small images (unread indicators are typically 8-12 points)
+        // Contact images are much larger (40+ points)
+        CGSize imageSize = image.size;
+        if (imageSize.width < 20 && imageSize.height < 20) {
+            UIColor *customTint = getSystemTintColor();
+            if (customTint) {
+                // Change rendering mode to template so it respects tint color
+                UIImage *tintedImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                %orig(tintedImage);
+                self.tintColor = customTint;
+            }
+        }
+    }
+}
 %end
 
 /* Hooks the navigation bar background and removes any defualt blurs. Creates a new blur effect and expands
@@ -1193,12 +1401,11 @@ same things too, like the blur. */
 
 %end
 
-
 %hook _UIVisualEffectBackdropView
 - (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled()) {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
         return;
     }
     
@@ -1233,8 +1440,8 @@ same things too, like the blur. */
     
     // Expand the effect view frame upward by 55 points
     CGRect expandedFrame = effectView.frame;
-    expandedFrame.origin.y -= 120;
-    expandedFrame.size.height += 120;
+    expandedFrame.origin.y -= 55;
+    expandedFrame.size.height += 55;
     effectView.frame = expandedFrame;
     
     // Apply gradient blur to message bar only
@@ -1257,12 +1464,11 @@ same things too, like the blur. */
 }
 %end
 
-
 %hook _UIVisualEffectContentView
 - (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled()) {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
         return;
     }
     
@@ -1293,7 +1499,7 @@ same things too, like the blur. */
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (!isTweakEnabled()) {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
         %orig;
         return;
     }
@@ -1328,10 +1534,11 @@ same things too, like the blur. */
 %end
 
 %hook _UIVisualEffectSubview
+
 - (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled()) {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
         return;
     }
     
@@ -1362,7 +1569,7 @@ same things too, like the blur. */
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (!isTweakEnabled()) {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
         %orig;
         return;
     }
@@ -1393,5 +1600,286 @@ same things too, like the blur. */
     }
     
     %orig;
+}
+%end
+
+%hook CKMessageEntryView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (isTweakEnabled() && isInputFieldCustomizationEnabled()) {
+        [self applyInputFieldCustomization];
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+            selector:@selector(applyInputFieldCustomization)
+            name:kPrefsChangedNotification
+            object:nil];
+            
+        if (isInputFieldCustomizationEnabled()) {
+            [self applyInputFieldCustomization];
+        }
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:self
+            name:kPrefsChangedNotification
+            object:nil];
+    }
+}
+
+%new
+- (void)applyInputFieldCustomization {
+    UIView *inputFieldContainer = nil;
+    
+    // Strategy 1: Look for UITextView
+    UITextView *textView = [self findTextView:self];
+    if (textView) {
+        inputFieldContainer = textView.superview;
+    }
+    
+    // Strategy 2: Look for rounded corner views
+    if (!inputFieldContainer) {
+        inputFieldContainer = [self findRoundedView:self];
+    }
+    
+    // Strategy 3: Look for specific class names
+    if (!inputFieldContainer) {
+        inputFieldContainer = [self findViewByClassName:self];
+    }
+    
+    if (!inputFieldContainer) {
+        return;
+    }
+    
+    // Remove any existing blur views (identified by class type)
+    NSArray *subviewsCopy = [inputFieldContainer.subviews copy];
+    for (UIView *subview in subviewsCopy) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    if (isInputFieldBlurEnabled()) {
+        UIBlurEffect *blur = [UIBlurEffect effectWithStyle:getInputFieldBlurStyle()];
+        UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+        blurView.frame = inputFieldContainer.bounds;
+        blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        blurView.layer.cornerRadius = inputFieldContainer.layer.cornerRadius;
+        blurView.layer.masksToBounds = YES;
+        blurView.clipsToBounds = YES;
+        
+        [inputFieldContainer insertSubview:blurView atIndex:0];
+        
+        inputFieldContainer.backgroundColor = [getInputFieldBackgroundColor() colorWithAlphaComponent:0.3];
+    } else {
+        inputFieldContainer.backgroundColor = getInputFieldBackgroundColor();
+    }
+}
+
+%new
+- (UITextView *)findTextView:(UIView *)view {
+    if ([view isKindOfClass:[UITextView class]]) {
+        return (UITextView *)view;
+    }
+    
+    for (UIView *subview in view.subviews) {
+        UITextView *found = [self findTextView:subview];
+        if (found) return found;
+    }
+    
+    return nil;
+}
+
+%new
+- (UIView *)findRoundedView:(UIView *)view {
+    if (view != self && 
+        view.layer.cornerRadius > 10.0 && 
+        view.layer.cornerRadius < 30.0 &&
+        CGRectGetHeight(view.frame) > 30 &&
+        CGRectGetHeight(view.frame) < 60) {
+        return view;
+    }
+    
+    for (UIView *subview in view.subviews) {
+        UIView *found = [self findRoundedView:subview];
+        if (found) return found;
+    }
+    
+    return nil;
+}
+
+%new
+- (UIView *)findViewByClassName:(UIView *)view {
+    NSString *className = NSStringFromClass([view class]);
+    
+    if ([className containsString:@"ContentView"] ||
+        [className containsString:@"BackgroundView"] ||
+        [className containsString:@"FieldEditor"]) {
+        
+        if (CGRectGetHeight(view.frame) > 30 && CGRectGetHeight(view.frame) < 60) {
+            return view;
+        }
+    }
+    
+    for (UIView *subview in view.subviews) {
+        UIView *found = [self findViewByClassName:subview];
+        if (found) return found;
+    }
+    
+    return nil;
+}
+
+%end
+
+%hook CKMessageEntryRichTextView
+- (void)layoutSubviews {
+    %orig;
+    
+    // Handle placeholder customization
+    if (isTweakEnabled() && isPlaceholderCustomizationEnabled() && isInputFieldCustomizationEnabled()) {
+        // Find and customize the placeholder label
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)subview;
+                label.textColor = getPlaceholderTextColor();
+                
+                NSString *customText = getPlaceholderText();
+                if (customText) {
+                    label.text = customText;
+                }
+                break;
+            }
+        }
+    }
+    
+    // Handle message input text color
+    if (isTweakEnabled() && isInputFieldCustomizationEnabled() && isMessageInputTextEnabled()) {
+        UIColor *customTextColor = getMessageInputTextColor();
+        if (customTextColor) {
+            self.textColor = customTextColor;
+        }
+    }
+}
+
+- (void)setTextColor:(UIColor *)textColor {
+    if (!isTweakEnabled() && isInputFieldCustomizationEnabled() && isMessageInputTextEnabled()) {
+        %orig;
+        return;
+    }
+    
+    UIColor *customTextColor = getMessageInputTextColor();
+    if (customTextColor) {
+        %orig(customTextColor);
+        return;
+    }
+    
+    %orig;
+}
+
+- (void)setText:(NSString *)text {
+    %orig;
+    
+    if (!isTweakEnabled() && isInputFieldCustomizationEnabled() && isMessageInputTextEnabled()) {
+        return;
+    }
+    
+    UIColor *customTextColor = getMessageInputTextColor();
+    if (customTextColor) {
+        self.textColor = customTextColor;
+    }
+}
+%end
+
+%hook CKEntryViewButton
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *effectView = (UIVisualEffectView *)subview;
+            
+            for (UIView *contentSubview in effectView.contentView.subviews) {
+                if ([contentSubview isKindOfClass:[UIButton class]]) {
+                    UIButton *button = (UIButton *)contentSubview;
+                    
+                    // Get current image to identify the send button
+                    UIImage *currentImage = [button imageForState:UIControlStateNormal];
+                    if (!currentImage) continue;
+                    
+                    CGFloat imageWidth = currentImage.size.width;
+                    CGFloat imageHeight = currentImage.size.height;
+                    
+                    // The send button is 27.3 x 27.3 - target that size
+                    if (imageWidth > 27 && imageWidth < 28 && imageHeight > 27 && imageHeight < 28) {
+                        // Set background to custom color
+                        button.backgroundColor = customTint;
+                        button.layer.cornerRadius = button.bounds.size.width / 2;
+                        button.clipsToBounds = YES;
+                        
+                        // Remove the button's image
+                        [button setImage:nil forState:UIControlStateNormal];
+                        
+                        // Remove any existing arrow overlays
+                        for (UIView *btnSubview in [button.subviews copy]) {
+                            if ([btnSubview isKindOfClass:[UIImageView class]]) {
+                                [btnSubview removeFromSuperview];
+                            }
+                        }
+                        
+                        // Use SF Symbol for arrow - slightly larger
+                        UIImage *arrowImage = [UIImage systemImageNamed:@"arrow.up"];
+                        if (arrowImage) {
+                            UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+                            arrowImage = [arrowImage imageWithConfiguration:config];
+                            arrowImage = [arrowImage imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+                            
+                            UIImageView *arrowOverlay = [[UIImageView alloc] initWithImage:arrowImage];
+                            arrowOverlay.userInteractionEnabled = NO;
+                            
+                            // Position the arrow - centered (no offset)
+                            CGSize buttonSize = button.bounds.size;
+                            CGSize arrowSize = arrowOverlay.bounds.size;
+                            arrowOverlay.frame = CGRectMake((buttonSize.width - arrowSize.width) / 2,
+                                                           (buttonSize.height - arrowSize.height) / 2,
+                                                           arrowSize.width,
+                                                           arrowSize.height);
+                            
+                            [button addSubview:arrowOverlay];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Force a layout update when the button appears
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
 }
 %end

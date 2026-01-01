@@ -1,6 +1,6 @@
 #import <Preferences/PSListController.h>
 #import <UIKit/UIKit.h>
 
-@interface WAMRootListController : PSListController 
+@interface WAMRootListController : PSListController <UIColorPickerViewControllerDelegate>
 
 @end

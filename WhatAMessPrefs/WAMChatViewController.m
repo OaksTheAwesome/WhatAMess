@@ -61,6 +61,21 @@
     [self showColorPicker];
 }
 
+- (void)pickInputFieldBackgroundColor {
+    _currentColorKey = @"inputFieldBackgroundColor";
+    [self showColorPicker];
+}
+
+- (void)pickPlaceholderTextColor {
+    _currentColorKey = @"placeholderTextColor";
+    [self showColorPicker];
+}
+
+- (void)pickMessageInputTextColor {
+    _currentColorKey = @"messageInputTextColor";
+    [self showColorPicker];
+}
+
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,
 converts it from hex string to UIColor. If no saved color, falls back to indicated default. Presents the picker
@@ -100,8 +115,10 @@ writes the changes immediately to the disk. Posts an update notification to appl
 
 /* Retrieves RGB and alpha from a UIColor, and converts each component from 0-1 to 0-255, the hex format.
 Formats those ints as a hex string with a leading "#" while ensuring two digits/component.*/
+// DEBUG VERSION - Logs to file instead of NSLog
+// Replace both methods with these:
+
 - (NSString *)hexFromColor:(UIColor *)color {
-    // Convert to RGB color space first to ensure consistent results
     CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
     CGColorRef rgbColor = CGColorCreateCopyByMatchingToColorSpace(
         rgbColorSpace,
@@ -120,11 +137,15 @@ Formats those ints as a hex string with a leading "#" while ensuring two digits/
             red = components[0];
             green = components[1];
             blue = components[2];
+            if (componentCount >= 4) {
+                alpha = components[3];
+            } else {
+                alpha = 1.0;
+            }
         }
         
         CGColorRelease(rgbColor);
     } else {
-        // Fallback to getRed:green:blue:alpha:
         [color getRed:&red green:&green blue:&blue alpha:&alpha];
     }
     
@@ -133,34 +154,63 @@ Formats those ints as a hex string with a leading "#" while ensuring two digits/
     int r = (int)(red * 255.0);
     int g = (int)(green * 255.0);
     int b = (int)(blue * 255.0);
+    int a = (int)(alpha * 255.0);
     
-    // Clamp values to 0-255 range
     r = MAX(0, MIN(255, r));
     g = MAX(0, MIN(255, g));
     b = MAX(0, MIN(255, b));
+    a = MAX(0, MIN(255, a));
     
-    NSString *hexString = [NSString stringWithFormat:@"#%02X%02X%02X", r, g, b];
-    NSLog(@"WhatAMess: Converting color to hex: %@", hexString);
-    
-    return hexString;
+    return [NSString stringWithFormat:@"#%02X%02X%02X%02X", r, g, b, a];
 }
 
 /* Opposite, converts hex string to ints for a UIColor. Strips the "#" and converts. Extracts RGB, divides
 by 255, and returns. */
 - (UIColor *)colorFromHex:(NSString *)hexString {
-	if ([hexString hasPrefix:@"#"]) {
-		hexString = [hexString substringFromIndex:1];
-	}
-	
-	unsigned int hex = 0;
-	NSScanner *scanner = [NSScanner scannerWithString:hexString];
-	[scanner scanHexInt:&hex];
-	
-	CGFloat r = ((hex >> 16) & 0xFF) / 255.0;
-	CGFloat g = ((hex >> 8) & 0xFF) / 255.0;
-	CGFloat b = (hex & 0xFF) / 255.0;
-	
-	return [UIColor colorWithRed:r green:g blue:b alpha:1.0];
+    if ([hexString hasPrefix:@"#"]) {
+        hexString = [hexString substringFromIndex:1];
+    }
+    
+    CGFloat r, g, b, a;
+    
+    if (hexString.length == 8) {
+        // RRGGBBAA format - parse each component separately
+        NSString *rStr = [hexString substringWithRange:NSMakeRange(0, 2)];
+        NSString *gStr = [hexString substringWithRange:NSMakeRange(2, 2)];
+        NSString *bStr = [hexString substringWithRange:NSMakeRange(4, 2)];
+        NSString *aStr = [hexString substringWithRange:NSMakeRange(6, 2)];
+        
+        unsigned int rInt, gInt, bInt, aInt;
+        [[NSScanner scannerWithString:rStr] scanHexInt:&rInt];
+        [[NSScanner scannerWithString:gStr] scanHexInt:&gInt];
+        [[NSScanner scannerWithString:bStr] scanHexInt:&bInt];
+        [[NSScanner scannerWithString:aStr] scanHexInt:&aInt];
+        
+        r = rInt / 255.0;
+        g = gInt / 255.0;
+        b = bInt / 255.0;
+        a = aInt / 255.0;
+    } else if (hexString.length == 6) {
+        // RRGGBB format
+        NSString *rStr = [hexString substringWithRange:NSMakeRange(0, 2)];
+        NSString *gStr = [hexString substringWithRange:NSMakeRange(2, 2)];
+        NSString *bStr = [hexString substringWithRange:NSMakeRange(4, 2)];
+        
+        unsigned int rInt, gInt, bInt;
+        [[NSScanner scannerWithString:rStr] scanHexInt:&rInt];
+        [[NSScanner scannerWithString:gStr] scanHexInt:&gInt];
+        [[NSScanner scannerWithString:bStr] scanHexInt:&bInt];
+        
+        r = rInt / 255.0;
+        g = gInt / 255.0;
+        b = bInt / 255.0;
+        a = 1.0;
+    } else {
+        // Invalid format
+        return [UIColor blackColor];
+    }
+    
+    return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
 

@@ -298,6 +298,26 @@
     		<key>action</key>
     		<string>pickMessageInputTextColor</string>
 		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSSwitchCell</string>
+    		<key>default</key>
+    		<false/>
+    		<key>defaults</key>
+    		<string>com.oakstheawesome.whatamessprefs</string>
+    		<key>key</key>
+    		<string>isMessageBarButtonsEnabled</string>
+    		<key>label</key>
+    		<string>Enable Camera/App Drawer Tint</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Camera/App Drawer Button Color</string>
+    		<key>action</key>
+    		<string>pickMessageBarButtonColor</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>Chat View Settings</string>

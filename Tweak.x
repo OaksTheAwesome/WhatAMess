@@ -20,6 +20,9 @@ inherits attributes from UILabel*/
 @end
 
 @interface _UIBarBackground : UIView
+- (void)createOurBlur;
+- (void)removeSystemViews;
+- (void)ensureBlurExists;
 @end
 
 @interface _UICollectionViewListSeparatorView : UIView
@@ -100,6 +103,60 @@ inherits attributes from UILabel*/
 @interface CKEntryViewButton : UIView
 @end
 
+@interface CKDetailsTableView : UITableView
+@end
+
+@interface CKSearchCollectionView : UICollectionView
+@end
+
+@interface _UITableViewHeaderFooterContentView : UIView
+@end
+
+@interface CNGroupIdentityHeaderContainerView : UIView
+@end
+
+@interface CKGroupPhotoCell : UIView
+@end
+
+@interface CNActionView : UIView
+@end
+
+@interface CKTranscriptDetailsResizableCell : UICollectionViewCell
+@end
+
+@interface CKDetailsSharedWithYouCell : UITableViewCell
+@end
+
+@interface CKDetailsChatOptionsCell : UITableViewCell
+@end
+
+@interface CKBackgroundDecorationView : UICollectionReusableView
+@end
+
+@interface CKRecipientSelectionView : UIView
+- (void)updateRecipientBackground;
+@end
+
+@interface CKComposeRecipientView : UIView
+@end
+
+@interface UITableViewLabel : UILabel
+@end
+
+@interface CKQuickActionSaveButton : UIView
+@end
+
+@interface UIButtonLabel : UILabel
+@end
+
+@interface CKAggregateAcknowledgementBalloonView : UIView
+@end
+
+@interface _UIPlatterClippingView : UIView
+@end
+
+@interface _UIPlatterTransformView : UIView
+@end
 
 /* ===================
   PREFERENCE THINGS 
@@ -227,6 +284,11 @@ BOOL isMessageInputTextEnabled() {
         return [prefs[@"isMessageInputTextEnabled"] boolValue];
     }
     return NO;
+}
+
+BOOL isMessageBarButtonsEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isMessageBarButtonsEnabled"] ? [prefs[@"isMessageBarButtonsEnabled"] boolValue] : NO;
 }
 
 /* Checks the amount of blur to apply to image based on user slider input. 
@@ -582,12 +644,25 @@ static UIColor *getMessageInputTextColor() {
     return [UIColor whiteColor];
 }
 
+static UIColor *getMessageBarButtonColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"messageBarButtonColor"];
+    
+    if (!hexColor) {
+        return nil;
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+
 /* ===========
     HOOKS 
 ============*/
 
 /* System tint color. */
 %hook UIView
+
 - (UIColor *)tintColor {
     if (!isTweakEnabled()) {
         return %orig;
@@ -595,6 +670,32 @@ static UIColor *getMessageInputTextColor() {
     
     UIColor *customTint = getSystemTintColor();
     if (customTint) {
+        // If this is an imageView with a chevron, exclude it
+        if ([self isKindOfClass:[UIImageView class]]) {
+            UIImageView *imageView = (UIImageView *)self;
+            CGSize imageSize = imageView.image.size;
+            
+            // Chevrons are typically taller than wide and positioned on the right
+            // Also check if we're in a conversation cell
+            UIView *parent = self.superview;
+            BOOL isInConvCell = NO;
+            int levels = 0;
+            
+            while (parent && levels < 7) {
+                if ([parent isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]) {
+                    isInConvCell = YES;
+                    break;
+                }
+                parent = parent.superview;
+                levels++;
+            }
+            
+            // If in conv cell and looks like a chevron (taller than wide), use original
+            if (isInConvCell && imageSize.height > imageSize.width && imageSize.width < 15) {
+                return %orig;
+            }
+        }
+        
         // Check if we're in the search bar or keyboard
         UIView *parent = self.superview;
         int levels = 0;
@@ -623,6 +724,41 @@ static UIColor *getMessageInputTextColor() {
     
     return %orig;
 }
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Only apply to plain UIView (not subclasses like UIImageView or UIButton)
+    if ([self class] == [UIView class] && [self.superview isKindOfClass:%c(CKQuickActionSaveButton)]) {
+        UIColor *receivedColor = getReceivedBubbleColor();
+        if (receivedColor) {
+            self.backgroundColor = receivedColor;
+        }
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Only apply to plain UIView (not subclasses like UIImageView or UIButton)
+    if ([self class] == [UIView class] && [self.superview isKindOfClass:%c(CKQuickActionSaveButton)]) {
+        UIColor *receivedColor = getReceivedBubbleColor();
+        if (receivedColor) {
+            %orig(receivedColor);
+            return;
+        }
+    }
+    
+    %orig;
+}
+
 %end
 
 /* Main view controller for Messages conversation list view. Everything inside modifies appearance. */
@@ -911,20 +1047,133 @@ sets tint color, if not, calls original method.*/
 it to provide more room for gradient. Gradient mask allows blur to fade smoothly from opaque to transparent,
 top to bottom. */
 %hook _UIBarBackground
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isModernNavBarEnabled()) {
+        return;
+    }
+    
+    if (self.window) {
+        [self ensureBlurExists];
+    }
+}
+
 - (void)layoutSubviews {
     %orig;
 
     if (!isTweakEnabled() || !isModernNavBarEnabled()) {
-		%orig;
-		return;
-	}
-
-    for (UIView *sub in self.subviews) {
-        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
-            [sub removeFromSuperview];
-        }
+        return;
     }
 
+    // Always clean up system views first
+    [self removeSystemViews];
+    
+    // Check if we have a valid blur with mask
+    UIVisualEffectView *ourBlur = nil;
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *blurView = (UIVisualEffectView *)sub;
+            // Check if it has our gradient mask
+            if ([blurView.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                ourBlur = blurView;
+                break;
+            }
+        }
+    }
+    
+    if (ourBlur) {
+        // We have our blur, update its frame
+        CGRect blurFrame = self.bounds;
+        blurFrame.size.height += 55;
+        ourBlur.frame = blurFrame;
+        
+        // Update mask - CRITICAL: disable implicit animations
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        
+        CAGradientLayer *maskLayer = (CAGradientLayer *)ourBlur.layer.mask;
+        maskLayer.frame = ourBlur.bounds;
+        
+        [CATransaction commit];
+    } else {
+        // Blur is missing, create it
+        [self createOurBlur];
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+}
+
+// Block system from adding its own views
+- (void)addSubview:(UIView *)view {
+    if (!isTweakEnabled() || !isModernNavBarEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we already have our blur
+    BOOL hasOurBlur = NO;
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            if ([sub.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                hasOurBlur = YES;
+                break;
+            }
+        }
+    }
+    
+    // If we have our blur and iOS is trying to add a system blur/image, block it
+    if (hasOurBlur && ([view isKindOfClass:[UIVisualEffectView class]] || [view isKindOfClass:[UIImageView class]])) {
+        return;
+    }
+    
+    %orig;
+}
+
+%new
+- (void)removeSystemViews {
+    // Remove any system blur/image views that don't have our gradient mask
+    NSMutableArray *viewsToRemove = [NSMutableArray array];
+    
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *blurView = (UIVisualEffectView *)sub;
+            // If it doesn't have our gradient mask, it's a system blur
+            if (![blurView.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                [viewsToRemove addObject:sub];
+            }
+        } else if ([sub isKindOfClass:[UIImageView class]]) {
+            // Remove system image backgrounds
+            [viewsToRemove addObject:sub];
+        }
+    }
+    
+    for (UIView *view in viewsToRemove) {
+        [view removeFromSuperview];
+    }
+}
+
+%new
+- (void)ensureBlurExists {
+    [self removeSystemViews];
+    
+    // Check if we already have our blur
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            if ([sub.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                // Already have our blur
+                return;
+            }
+        }
+    }
+    
+    // Create our blur
+    [self createOurBlur];
+}
+
+%new
+- (void)createOurBlur {
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
 
@@ -934,18 +1183,33 @@ top to bottom. */
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self insertSubview:blurView atIndex:0];
 
+    // Create gradient mask WITHOUT animations
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
     maskLayer.frame = blurView.bounds;
     maskLayer.colors = @[
         (id)[UIColor colorWithWhite:1 alpha:1.0].CGColor,
         (id)[UIColor colorWithWhite:1 alpha:0.9].CGColor,
-		(id)[UIColor colorWithWhite:1 alpha:0.55].CGColor,
-		(id)[UIColor colorWithWhite:1 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:1 alpha:0.55].CGColor,
+        (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor,
         (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor
     ];
     maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
+    
+    // CRITICAL: Prevent any implicit animations on the mask
+    maskLayer.actions = @{
+        @"position": [NSNull null],
+        @"bounds": [NSNull null],
+        @"frame": [NSNull null]
+    };
+    
     blurView.layer.mask = maskLayer;
+    
+    [CATransaction commit];
 }
+
 %end
 
 /* Targets NavBar Title, only modifying the label titled "Messages" to avoid modifying other name views
@@ -1128,7 +1392,7 @@ same things too, like the blur. */
             targetColor = getReceivedBubbleColor();
         } else if (parentBalloon.color == 1) {
             targetColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+        } else if (parentBalloon.color == 0) {
             targetColor = getSMSSentBubbleColor();
         }
         
@@ -1142,6 +1406,7 @@ same things too, like the blur. */
     
     %orig;
 }
+
 - (void)didMoveToSuperview {
     %orig;
     
@@ -1149,9 +1414,36 @@ same things too, like the blur. */
         return;
     }
     
+    // Check if we're in a reaction bubble
+    UIView *parent = self.superview;
+    BOOL isInReactionBubble = NO;
+    int levels = 0;
+    
+    while (parent && levels < 5) {
+        if ([parent isKindOfClass:%c(CKAggregateAcknowledgementBalloonView)]) {
+            isInReactionBubble = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInReactionBubble) {
+        UIColor *customTint = getSentBubbleColor();
+        if (customTint) {
+            self.backgroundColor = customTint;
+        }
+        return;
+    }
+    
+    // Original bubble color logic
+    if (!isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
     // Force color update immediately when added to view hierarchy
     CKColoredBalloonView *parentBalloon = nil;
-    UIView *parent = self.superview;
+    parent = self.superview;
     while (parent) {
         if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
             parentBalloon = (CKColoredBalloonView *)parent;
@@ -1160,11 +1452,11 @@ same things too, like the blur. */
         parent = parent.superview;
     }
     
-    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) { // Changed from 3 to 0
+    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) {
         UIColor *sentColor = nil;
         if (parentBalloon.color == 1) {
             sentColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+        } else if (parentBalloon.color == 0) {
             sentColor = getSMSSentBubbleColor();
         }
         
@@ -1175,6 +1467,7 @@ same things too, like the blur. */
         }
     }
 }
+
 - (void)layoutSubviews {
     %orig;
     
@@ -1193,11 +1486,11 @@ same things too, like the blur. */
         parent = parent.superview;
     }
     
-    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) { // Changed from 3 to 0
+    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) {
         UIColor *sentColor = nil;
         if (parentBalloon.color == 1) {
             sentColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) { // Changed from 3 to 0
+        } else if (parentBalloon.color == 0) {
             sentColor = getSMSSentBubbleColor();
         }
         
@@ -1808,9 +2101,8 @@ same things too, like the blur. */
     }
     
     UIColor *customTint = getSystemTintColor();
-    if (!customTint) {
-        return;
-    }
+    UIColor *buttonColor = getMessageBarButtonColor();
+    BOOL customizeOtherButtons = isMessageBarButtonsEnabled();
     
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
@@ -1820,49 +2112,80 @@ same things too, like the blur. */
                 if ([contentSubview isKindOfClass:[UIButton class]]) {
                     UIButton *button = (UIButton *)contentSubview;
                     
-                    // Get current image to identify the send button
-                    UIImage *currentImage = [button imageForState:UIControlStateNormal];
-                    if (!currentImage) continue;
-                    
-                    CGFloat imageWidth = currentImage.size.width;
-                    CGFloat imageHeight = currentImage.size.height;
-                    
-                    // The send button is 27.3 x 27.3 - target that size
-                    if (imageWidth > 27 && imageWidth < 28 && imageHeight > 27 && imageHeight < 28) {
-                        // Set background to custom color
-                        button.backgroundColor = customTint;
-                        button.layer.cornerRadius = button.bounds.size.width / 2;
-                        button.clipsToBounds = YES;
-                        
-                        // Remove the button's image
-                        [button setImage:nil forState:UIControlStateNormal];
-                        
-                        // Remove any existing arrow overlays
-                        for (UIView *btnSubview in [button.subviews copy]) {
-                            if ([btnSubview isKindOfClass:[UIImageView class]]) {
-                                [btnSubview removeFromSuperview];
+                    // Look for UIImageViews inside the button
+                    for (UIView *btnSubview in [button.subviews copy]) {
+                        if ([btnSubview isKindOfClass:[UIImageView class]]) {
+                            UIImageView *imageView = (UIImageView *)btnSubview;
+                            CGSize frameSize = imageView.frame.size;
+                            
+                            // Send button arrow (27.3 x 27.3)
+                            if (frameSize.width > 27 && frameSize.width < 28 && 
+                                frameSize.height > 27 && frameSize.height < 28) {
+                                if (!customTint) continue;
+                                
+                                // Set background to custom color
+                                button.backgroundColor = customTint;
+                                button.layer.cornerRadius = button.bounds.size.width / 2;
+                                button.clipsToBounds = YES;
+                                
+                                // Remove this imageView
+                                [imageView removeFromSuperview];
+                                
+                                // Create arrow overlay
+                                UIImage *arrowImage = [UIImage systemImageNamed:@"arrow.up"];
+                                if (arrowImage) {
+                                    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+                                    arrowImage = [arrowImage imageWithConfiguration:config];
+                                    arrowImage = [arrowImage imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+                                    
+                                    UIImageView *arrowOverlay = [[UIImageView alloc] initWithImage:arrowImage];
+                                    arrowOverlay.userInteractionEnabled = NO;
+                                    
+                                    CGSize buttonSize = button.bounds.size;
+                                    CGSize arrowSize = arrowOverlay.bounds.size;
+                                    arrowOverlay.frame = CGRectMake((buttonSize.width - arrowSize.width) / 2,
+                                                                   (buttonSize.height - arrowSize.height) / 2,
+                                                                   arrowSize.width,
+                                                                   arrowSize.height);
+                                    
+                                    [button addSubview:arrowOverlay];
+                                }
                             }
-                        }
-                        
-                        // Use SF Symbol for arrow - slightly larger
-                        UIImage *arrowImage = [UIImage systemImageNamed:@"arrow.up"];
-                        if (arrowImage) {
-                            UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
-                            arrowImage = [arrowImage imageWithConfiguration:config];
-                            arrowImage = [arrowImage imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
-                            
-                            UIImageView *arrowOverlay = [[UIImageView alloc] initWithImage:arrowImage];
-                            arrowOverlay.userInteractionEnabled = NO;
-                            
-                            // Position the arrow - centered (no offset)
-                            CGSize buttonSize = button.bounds.size;
-                            CGSize arrowSize = arrowOverlay.bounds.size;
-                            arrowOverlay.frame = CGRectMake((buttonSize.width - arrowSize.width) / 2,
-                                                           (buttonSize.height - arrowSize.height) / 2,
-                                                           arrowSize.width,
-                                                           arrowSize.height);
-                            
-                            [button addSubview:arrowOverlay];
+                            // Camera button (36 x 36) or App drawer button (41 x 32)
+                            else if (customizeOtherButtons && buttonColor &&
+                                     ((frameSize.width > 35 && frameSize.width < 37 && frameSize.height > 35 && frameSize.height < 37) ||
+                                      (frameSize.width > 40 && frameSize.width < 42 && frameSize.height > 31 && frameSize.height < 33))) {
+                                
+                                // Get the original image and frame
+                                UIImage *originalImage = imageView.image;
+                                CGRect originalFrame = imageView.frame;
+                                
+                                if (!originalImage) continue;
+                                
+                                // Create colored version of the image
+                                UIImage *coloredImage = [originalImage imageWithTintColor:buttonColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+                                
+                                // Create a COMPLETELY NEW imageView with the colored image
+                                UIImageView *newImageView = [[UIImageView alloc] initWithImage:coloredImage];
+                                newImageView.contentMode = imageView.contentMode;
+                                newImageView.userInteractionEnabled = NO;
+                                
+                                // Remove old imageView
+                                [imageView removeFromSuperview];
+                                
+                                // Convert frame to self (CKEntryViewButton) coordinate system
+                                CGRect frameInButton = originalFrame;
+                                CGRect frameInEffectContent = [button convertRect:frameInButton toView:effectView.contentView];
+                                CGRect frameInEffect = [effectView.contentView convertRect:frameInEffectContent toView:effectView];
+                                CGRect frameInSelf = [effectView convertRect:frameInEffect toView:self];
+                                
+                                newImageView.frame = frameInSelf;
+                                
+                                // Add the NEW imageView directly to CKEntryViewButton
+                                [self addSubview:newImageView];
+                                
+                                logToFile([NSString stringWithFormat:@"Created new colored imageView: %.2f x %.2f", frameSize.width, frameSize.height]);
+                            }
                         }
                     }
                 }
@@ -1878,8 +2201,1025 @@ same things too, like the blur. */
         return;
     }
     
-    // Force a layout update when the button appears
     [self setNeedsLayout];
     [self layoutIfNeeded];
 }
+%end
+
+%hook CKDetailsTableView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Apply the same background logic as chat view
+    BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+    UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+    
+    if (isChatColorBgEnabled()) {
+        self.backgroundColor = getChatBackgroundColor();
+    }
+    else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) {
+            chatBgImage = blurImage(chatBgImage, blurAmount);
+        }
+        
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+        imageView.image = chatBgImage;
+        imageView.contentMode = UIViewContentModeScaleAspectFill;
+        imageView.clipsToBounds = YES;
+        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        self.backgroundView = imageView;
+    }
+    
+    // Listen for preference changes
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(updateDetailsBackground)
+        name:kPrefsChangedNotification
+        object:nil];
+}
+
+%end
+
+%hook CKSearchCollectionView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in CKDetailsTableView
+    UIView *parent = self.superview;
+    BOOL isInDetailsView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:%c(CKDetailsTableView)]) {
+            isInDetailsView = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInDetailsView) {
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+%end
+/* Hook for table header/footer content view - make transparent */
+%hook _UITableViewHeaderFooterContentView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in the details view
+    UIView *parent = self.superview;
+    BOOL isInDetailsView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKDetailsTableView)]) {
+            isInDetailsView = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInDetailsView) {
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in the details view
+    UIView *parent = self.superview;
+    BOOL isInDetailsView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKDetailsTableView)]) {
+            isInDetailsView = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInDetailsView) {
+        %orig([UIColor clearColor]);
+        return;
+    }
+    
+    %orig;
+}
+
+%end
+
+/* Hook for contact header container view - make transparent */
+%hook CNGroupIdentityHeaderContainerView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    %orig([UIColor clearColor]);
+}
+
+%end
+
+%hook CKGroupPhotoCell
+
+- (void) didMoveToWindow {
+	%orig;
+
+	if (!isTweakEnabled()) {
+		return;
+	}
+
+	self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    %orig([UIColor clearColor]);
+}
+
+%end
+
+/* Hook for CNActionView - apply thinner blur */
+%hook CNActionView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Remove any existing blur views
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add thinner blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blurView.layer.cornerRadius = self.layer.cornerRadius;
+    blurView.clipsToBounds = YES;
+    
+    [self insertSubview:blurView atIndex:0];
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update blur view frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.bounds;
+            subview.layer.cornerRadius = self.layer.cornerRadius;
+            break;
+        }
+    }
+}
+
+%end
+
+/* Hook for CKTranscriptDetailsResizableCell - apply thinner blur */
+%hook CKTranscriptDetailsResizableCell
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Remove any existing blur views from contentView
+    for (UIView *subview in [self.contentView.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add thinner blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.contentView.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blurView.layer.cornerRadius = self.contentView.layer.cornerRadius;
+    blurView.clipsToBounds = YES;
+    
+    [self.contentView insertSubview:blurView atIndex:0];
+    self.contentView.backgroundColor = [UIColor clearColor];
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update blur view frame if it exists
+    for (UIView *subview in self.contentView.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.contentView.bounds;
+            subview.layer.cornerRadius = self.contentView.layer.cornerRadius;
+            break;
+        }
+    }
+}
+
+%end
+
+/* Hook for CKDetailsSharedWithYouCell - apply thinner blur, fixed to cover entire cell */
+%hook CKDetailsSharedWithYouCell
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Remove any existing blur views - check both self and contentView
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    for (UIView *subview in [self.contentView.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add thinner blur effect to self (not contentView) to cover entire cell
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blurView.layer.cornerRadius = self.layer.cornerRadius;
+    blurView.clipsToBounds = YES;
+    
+    [self insertSubview:blurView atIndex:0];
+    self.backgroundColor = [UIColor clearColor];
+    self.contentView.backgroundColor = [UIColor clearColor];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update blur view frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.bounds;
+            subview.layer.cornerRadius = self.layer.cornerRadius;
+            break;
+        }
+    }
+}
+
+%end
+
+/* Hook for CKBackgroundDecorationView - apply thinner blur */
+%hook CKBackgroundDecorationView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Remove any existing blur views
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add thinner blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blurView.layer.cornerRadius = self.layer.cornerRadius;
+    blurView.clipsToBounds = YES;
+    
+    [self insertSubview:blurView atIndex:0];
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update blur view frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.bounds;
+            subview.layer.cornerRadius = self.layer.cornerRadius;
+            break;
+        }
+    }
+}
+
+%end
+
+/* Hook for CKDetailsChatOptionsCell - apply thinner blur */
+/* Hook for CKDetailsChatOptionsCell - apply thinner blur, fixed to cover entire cell */
+%hook CKDetailsChatOptionsCell
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Remove any existing blur views - check both self and contentView
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    for (UIView *subview in [self.contentView.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add thinner blur effect to self (not contentView) to cover entire cell
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // Don't set corner radius on blur view - let cell's clipping handle it
+    blurView.layer.cornerRadius = 0;
+    blurView.clipsToBounds = NO;
+    
+    [self insertSubview:blurView atIndex:0];
+    self.backgroundColor = [UIColor clearColor];
+    self.contentView.backgroundColor = [UIColor clearColor];
+    
+    // Ensure the cell itself clips to its bounds with its corner radius
+    self.clipsToBounds = YES;
+}
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update blur view frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.bounds;
+            // Keep corner radius at 0 so blur extends to edges
+            subview.layer.cornerRadius = 0;
+            break;
+        }
+    }
+    
+    // Make sure cell clips to its bounds
+    self.clipsToBounds = YES;
+}
+%end
+
+%hook CKRecipientSelectionView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    [self updateRecipientBackground];
+    
+    // Listen for preference changes
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(updateRecipientBackground)
+        name:kPrefsChangedNotification
+        object:nil];
+}
+
+%new
+- (void)updateRecipientBackground {
+    clearPrefsCache();
+    
+    // Apply the same background logic as chat view
+    BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+    UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+    
+    // Remove any existing background image views
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            UIImageView *imgView = (UIImageView *)subview;
+            // Check if it's a background image (large, positioned at origin)
+            if (CGRectEqualToRect(imgView.frame, self.bounds) || (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0)) {
+                [imgView removeFromSuperview];
+            }
+        }
+    }
+    
+    if (isChatColorBgEnabled()) {
+        self.backgroundColor = getChatBackgroundColor();
+    }
+    else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) {
+            chatBgImage = blurImage(chatBgImage, blurAmount);
+        }
+        
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+        imageView.image = chatBgImage;
+        imageView.contentMode = UIViewContentModeScaleAspectFill;
+        imageView.clipsToBounds = YES;
+        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self insertSubview:imageView atIndex:0];
+        
+        self.backgroundColor = [UIColor clearColor];
+    } else {
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update background image frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            UIImageView *imgView = (UIImageView *)subview;
+            if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) {
+                imgView.frame = self.bounds;
+                break;
+            }
+        }
+    }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
+}
+
+%end
+
+%hook CKComposeRecipientView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    %orig([UIColor clearColor]);
+}
+
+%end
+
+%hook UITableViewLabel
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Don't change if text is red
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    if (self.textColor && [self.textColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        if (red > 0.7 && green < 0.3 && blue < 0.3) {
+            return;
+        }
+    }
+    
+    self.textColor = customTint;
+}
+
+- (void)setTextColor:(UIColor *)color {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if the incoming color is red
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    if (color && [color getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        if (red > 0.7 && green < 0.3 && blue < 0.3) {
+            %orig;
+            return;
+        }
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        %orig(customTint);
+        return;
+    }
+    
+    %orig;
+}
+%end
+
+%hook UISwitch
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        self.onTintColor = customTint;
+    }
+}
+
+- (void)setOn:(BOOL)on animated:(BOOL)animated {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        self.onTintColor = customTint;
+    }
+}
+
+%end
+
+/* Hook for UIButtonLabel - apply custom tint color to "Edited" text */
+%hook UIButtonLabel
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+    }
+}
+
+- (void)setTextColor:(UIColor *)color {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            %orig(customTint);
+            return;
+        }
+    }
+    
+    %orig;
+}
+
+- (void)setText:(NSString *)text {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+    }
+}
+
+%end
+
+%hook UIButton
+
+- (void)setTintColor:(UIColor *)color {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            %orig(customTint);
+            return;
+        }
+    }
+    
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.tintColor = customTint;
+            
+            // Also set the color on the button label directly
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:%c(UIButtonLabel)]) {
+                    [(UILabel *)subview setTextColor:customTint];
+                }
+            }
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're in a CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.tintColor = customTint;
+            
+            // Also set the color on the button label directly
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:%c(UIButtonLabel)]) {
+                    [(UILabel *)subview setTextColor:customTint];
+                }
+            }
+        }
+    }
+}
+
+%end
+
+%hook CKAggregateAcknowledgementBalloonView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        self.tintColor = customTint;
+        
+        // Apply tint to all UIImageView subviews
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                subview.tintColor = customTint;
+            }
+        }
+    }
+}
+
+- (void)setTintColor:(UIColor *)color {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        %orig(customTint);
+        
+        // Apply tint to all UIImageView subviews
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                subview.tintColor = customTint;
+            }
+        }
+        return;
+    }
+    
+    %orig;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (customTint) {
+        self.tintColor = customTint;
+        
+        // Apply tint to all UIImageView subviews
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                subview.tintColor = customTint;
+            }
+        }
+    }
+}
+
+%end
+
+/* Hook for _UIPlatterClippingView - apply background to 3D touch previews */
+%hook _UIPlatterClippingView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Only apply if the view is large enough (full preview, not the small box)
+    if (self.bounds.size.height < 200) {
+        return;
+    }
+    
+    // Apply the same background logic as chat view
+    BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+    UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+    
+    if (isChatColorBgEnabled()) {
+        self.backgroundColor = getChatBackgroundColor();
+    }
+    else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) {
+            chatBgImage = blurImage(chatBgImage, blurAmount);
+        }
+        
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+        imageView.image = chatBgImage;
+        imageView.contentMode = UIViewContentModeScaleAspectFill;
+        imageView.clipsToBounds = YES;
+        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self insertSubview:imageView atIndex:0];
+        
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // If view is small (collapsed), remove any background images
+    if (self.bounds.size.height < 200) {
+        for (UIView *subview in [self.subviews copy]) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                UIImageView *imgView = (UIImageView *)subview;
+                if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) {
+                    [imgView removeFromSuperview];
+                }
+            }
+        }
+        self.backgroundColor = [UIColor clearColor];
+        return;
+    }
+    
+    // Check if we already have a background image
+    BOOL hasBackgroundImage = NO;
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            UIImageView *imgView = (UIImageView *)subview;
+            if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) {
+                imgView.frame = self.bounds;
+                hasBackgroundImage = YES;
+                break;
+            }
+        }
+    }
+    
+    // If no background image exists but we should have one, add it
+    if (!hasBackgroundImage) {
+        BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+        UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+        
+        if (isChatColorBgEnabled()) {
+            self.backgroundColor = getChatBackgroundColor();
+        }
+        else if (chatBgImage && isChatImageBgEnabled()) {
+            CGFloat blurAmount = getChatImageBlurAmount();
+            if (blurAmount > 0) {
+                chatBgImage = blurImage(chatBgImage, blurAmount);
+            }
+            
+            UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+            imageView.image = chatBgImage;
+            imageView.contentMode = UIViewContentModeScaleAspectFill;
+            imageView.clipsToBounds = YES;
+            imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [self insertSubview:imageView atIndex:0];
+            
+            self.backgroundColor = [UIColor clearColor];
+        }
+    }
+}
+
 %end

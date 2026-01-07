@@ -61,6 +61,8 @@ inherits attributes from UILabel*/
 @interface CKGradientView : UIView
 - (void)setColors:(NSArray *)colors;
 - (NSArray *)colors;
+- (BOOL)isInsideReactionBubble;
+- (void)applyColorRecursively:(UIColor *)color;
 @end
 
 @interface CKBalloonImageView : UIImageView
@@ -157,6 +159,18 @@ inherits attributes from UILabel*/
 
 @interface _UIPlatterTransformView : UIView
 @end
+
+@interface _UISystemBackgroundView : UIView
+@end
+
+@interface CKTranscriptReportSpamCell : UIView
+- (void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color;
+@end
+
+@interface CKAggregateAcknowledgementGradientBalloonView : UIView
+- (void)hideGradientRecursively:(UIView *)view;
+@end
+
 
 /* ===================
   PREFERENCE THINGS 
@@ -654,7 +668,6 @@ static UIColor *getMessageBarButtonColor() {
     
     return colorFromHex(hexColor);
 }
-
 
 /* ===========
     HOOKS 
@@ -1275,23 +1288,23 @@ across messages app. Replaces the title with a custom user string and sets a cus
 /* Handles glow behind pinned conversations. If toggled true, hides. Otherwise, shown. Simple again. */
 %hook CKPinnedConversationView
 
--(void) didMoveToWindow {
-	%orig;
+- (void)didMoveToWindow {
+    %orig;
 
-	if (!isTweakEnabled()) return;
+    if (!isTweakEnabled()) return;
 
-	for (UIView *sub in self.subviews) {
-		if (![sub isKindOfClass:[UIImageView class]]) continue;
+    // Hide/show the glow images
+    for (UIView *sub in self.subviews) {
+        if (![sub isKindOfClass:[UIImageView class]]) continue;
 
-		UIImageView *img = (UIImageView *)sub;
-
-		img.hidden = isPinnedGlowEnabled();
-		img.alpha = isPinnedGlowEnabled() ? 1.0 : 0.0;
-	}
+        UIImageView *img = (UIImageView *)sub;
+        img.hidden = isPinnedGlowEnabled();
+        img.alpha = isPinnedGlowEnabled() ? 1.0 : 0.0;
+    }
 }
 
 %end
- 
+
  /* Hides some views for color/image bg in chats. */
 %hook CKTranscriptCollectionViewController
 
@@ -1368,144 +1381,74 @@ same things too, like the blur. */
 %end
 
 %hook CKGradientView
-- (void)setColors:(NSArray *)colors {
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
-        %orig;
-        return;
-    }
-    
-    // Find parent balloon
-    CKColoredBalloonView *parentBalloon = nil;
-    UIView *parent = self.superview;
-    while (parent) {
-        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
-            parentBalloon = (CKColoredBalloonView *)parent;
-            break;
-        }
-        parent = parent.superview;
-    }
-    
-    if (parentBalloon) {
-        UIColor *targetColor = nil;
-        
-        if (parentBalloon.color == -1) {
-            targetColor = getReceivedBubbleColor();
-        } else if (parentBalloon.color == 1) {
-            targetColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) {
-            targetColor = getSMSSentBubbleColor();
-        }
-        
-        if (targetColor) {
-            // Replace the colors array with our custom color
-            NSArray *customColors = @[targetColor, targetColor];
-            %orig(customColors);
-            return;
-        }
-    }
-    
-    %orig;
-}
-
-- (void)didMoveToSuperview {
-    %orig;
-    
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
-        return;
-    }
-    
-    // Check if we're in a reaction bubble
-    UIView *parent = self.superview;
-    BOOL isInReactionBubble = NO;
-    int levels = 0;
-    
-    while (parent && levels < 5) {
-        if ([parent isKindOfClass:%c(CKAggregateAcknowledgementBalloonView)]) {
-            isInReactionBubble = YES;
-            break;
-        }
-        parent = parent.superview;
-        levels++;
-    }
-    
-    if (isInReactionBubble) {
-        UIColor *customTint = getSentBubbleColor();
-        if (customTint) {
-            self.backgroundColor = customTint;
-        }
-        return;
-    }
-    
-    // Original bubble color logic
-    if (!isCustomBubbleColorsEnabled()) {
-        return;
-    }
-    
-    // Force color update immediately when added to view hierarchy
-    CKColoredBalloonView *parentBalloon = nil;
-    parent = self.superview;
-    while (parent) {
-        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
-            parentBalloon = (CKColoredBalloonView *)parent;
-            break;
-        }
-        parent = parent.superview;
-    }
-    
-    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) {
-        UIColor *sentColor = nil;
-        if (parentBalloon.color == 1) {
-            sentColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) {
-            sentColor = getSMSSentBubbleColor();
-        }
-        
-        if (sentColor) {
-            NSArray *customColors = @[sentColor, sentColor];
-            [self setColors:customColors];
-            logToFile(@"Forced color update in didMoveToSuperview");
-        }
-    }
-}
 
 - (void)layoutSubviews {
     %orig;
-    
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) return;
+    if (self.frame.size.width <= 0 || self.frame.size.height <= 0) return;
+
+    // Check if this gradient is inside a reaction bubble
+    BOOL isReaction = [self.superview isKindOfClass:objc_getClass("CKAggregateAcknowledgmentBalloonView")];
+    if (isReaction) {
+        self.hidden = YES; // Hide reaction bubble entirely
         return;
     }
-    
-    // Also force on layout
-    CKColoredBalloonView *parentBalloon = nil;
+
+    // Otherwise, normal bubble -> choose user-defined color
+    UIColor *bubbleColor = getSentBubbleColor(); // default to sent bubble
     UIView *parent = self.superview;
     while (parent) {
-        if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
-            parentBalloon = (CKColoredBalloonView *)parent;
+        if ([parent isKindOfClass:objc_getClass("CKColoredBalloonView")]) {
+            CKColoredBalloonView *balloon = (CKColoredBalloonView *)parent;
+            if (balloon.color == -1) {
+                bubbleColor = getReceivedBubbleColor();
+            } else if (balloon.color == 1) {
+                bubbleColor = getSentBubbleColor();
+            } else if (balloon.color == 0) {
+                bubbleColor = getSMSSentBubbleColor();
+            }
             break;
         }
         parent = parent.superview;
     }
-    
-    if (parentBalloon && (parentBalloon.color == 1 || parentBalloon.color == 0)) {
-        UIColor *sentColor = nil;
-        if (parentBalloon.color == 1) {
-            sentColor = getSentBubbleColor();
-        } else if (parentBalloon.color == 0) {
-            sentColor = getSMSSentBubbleColor();
-        }
-        
-        if (sentColor) {
-            NSArray *currentColors = [self colors];
-            
-            // Only update if colors don't match
-            if (currentColors.count > 0 && ![currentColors[0] isEqual:sentColor]) {
-                NSArray *customColors = @[sentColor, sentColor];
-                [self setColors:customColors];
-                logToFile(@"Fixed bubble in layoutSubviews");
-            }
-        }
-    }
+
+    [self setColors:@[bubbleColor, bubbleColor]]; // Solid color
 }
+
+- (void)setColors:(NSArray *)colors {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
+        %orig;
+        return;
+    }
+
+    BOOL isReaction = [self.superview isKindOfClass:objc_getClass("CKAggregateAcknowledgmentBalloonView")];
+    if (isReaction) {
+        self.hidden = YES; // hide reactions
+        return;
+    }
+
+    // Force normal bubbles to user-defined color
+    UIColor *bubbleColor = getSentBubbleColor();
+    UIView *parent = self.superview;
+    while (parent) {
+        if ([parent isKindOfClass:objc_getClass("CKColoredBalloonView")]) {
+            CKColoredBalloonView *balloon = (CKColoredBalloonView *)parent;
+            if (balloon.color == -1) {
+                bubbleColor = getReceivedBubbleColor();
+            } else if (balloon.color == 1) {
+                bubbleColor = getSentBubbleColor();
+            } else if (balloon.color == 0) {
+                bubbleColor = getSMSSentBubbleColor();
+            }
+            break;
+        }
+        parent = parent.superview;
+    }
+
+    %orig(@[bubbleColor, bubbleColor]);
+}
+
 %end
 
 %hook CKBalloonImageView
@@ -1695,6 +1638,7 @@ same things too, like the blur. */
 %end
 
 %hook _UIVisualEffectBackdropView
+
 - (void)layoutSubviews {
     %orig;
     
@@ -1713,7 +1657,6 @@ same things too, like the blur. */
         if ([parent isKindOfClass:[UIVisualEffectView class]] && !effectView) {
             effectView = (UIVisualEffectView *)parent;
         }
-        // Check if we're in keyboard first
         if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
             [parent isKindOfClass:%c(UIInputView)] ||
             [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
@@ -1730,16 +1673,37 @@ same things too, like the blur. */
     if (!isInMessageInput || isInKeyboard || !effectView) {
         return;
     }
-    
+
+    // 🔒 FIX 1: PREVENT BLACK FLASH (CRITICAL)
+    effectView.backgroundColor = [UIColor clearColor];
+    effectView.contentView.backgroundColor = [UIColor clearColor];
+    effectView.opaque = NO;
+
+    self.backgroundColor = [UIColor clearColor];
+    self.opaque = NO;
+
+    // 🔒 FIX 2: FORCE EFFECT TO EXIST BEFORE FIRST DRAW
+    if (!effectView.effect) {
+        effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    }
+
+    // 🔒 FIX 3: DISABLE IMPLICIT ANIMATIONS (FRAME EXPANSION)
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+
     // Expand the effect view frame upward by 55 points
     CGRect expandedFrame = effectView.frame;
     expandedFrame.origin.y -= 55;
     expandedFrame.size.height += 55;
     effectView.frame = expandedFrame;
-    
+
+    [CATransaction commit];
+
     // Apply gradient blur to message bar only
-    UIBlurEffect *customBlur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
-    effectView.effect = customBlur;
+    // (Safe to reassign — effect is already non-nil now)
+   if (!effectView.effect) {
+    effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+}
     self.alpha = 1.0;
     
     // Apply gradient mask
@@ -1754,6 +1718,50 @@ same things too, like the blur. */
     ];
     maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
     self.layer.mask = maskLayer;
+}
+
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    %orig;
+
+    if (!newSuperview) return;
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) return;
+
+    UIView *parent = newSuperview;
+    UIVisualEffectView *effectView = nil;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+
+    while (parent && levels < 15) {
+        if ([parent isKindOfClass:[UIVisualEffectView class]] && !effectView) {
+            effectView = (UIVisualEffectView *)parent;
+        }
+
+        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] ||
+            [parent isKindOfClass:%c(UIInputView)] ||
+            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+            isInKeyboard = YES;
+            break;
+        }
+
+        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+            isInMessageInput = YES;
+        }
+
+        parent = parent.superview;
+        levels++;
+    }
+
+    if (!isInMessageInput || isInKeyboard || !effectView) return;
+
+    // ✅ SAFE: backdrop views do not participate in snapshots
+    effectView.opaque = NO;
+    effectView.backgroundColor = [UIColor clearColor];
+    effectView.contentView.backgroundColor = [UIColor clearColor];
+
+    if (!effectView.effect) {
+        effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    }
 }
 %end
 
@@ -2830,6 +2838,44 @@ same things too, like the blur. */
 /* Hook for UIButtonLabel - apply custom tint color to "Edited" text */
 %hook UIButtonLabel
 
+- (void)setText:(NSString *)text {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Handle Report Junk button
+    if ([text isEqualToString:@"Report Junk"]) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+        return;
+    }
+    
+    // Existing CKTranscriptStatusCell logic
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+    }
+}
+
 - (void)didMoveToWindow {
     %orig;
     
@@ -2837,7 +2883,16 @@ same things too, like the blur. */
         return;
     }
     
-    // Check if we're in a CKTranscriptStatusCell
+    // Handle Report Junk button
+    if ([self.text isEqualToString:@"Report Junk"]) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+        return;
+    }
+    
+    // Existing CKTranscriptStatusCell logic
     UIView *parent = self.superview;
     BOOL isInStatusCell = NO;
     int levels = 0;
@@ -2865,7 +2920,16 @@ same things too, like the blur. */
         return;
     }
     
-    // Check if we're in a CKTranscriptStatusCell
+    // Handle Report Junk button - force our color
+    if ([self.text isEqualToString:@"Report Junk"]) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            %orig(customTint);
+            return;
+        }
+    }
+    
+    // Existing CKTranscriptStatusCell logic
     UIView *parent = self.superview;
     BOOL isInStatusCell = NO;
     int levels = 0;
@@ -2890,35 +2954,6 @@ same things too, like the blur. */
     %orig;
 }
 
-- (void)setText:(NSString *)text {
-    %orig;
-    
-    if (!isTweakEnabled()) {
-        return;
-    }
-    
-    // Check if we're in a CKTranscriptStatusCell
-    UIView *parent = self.superview;
-    BOOL isInStatusCell = NO;
-    int levels = 0;
-    
-    while (parent && levels < 10) {
-        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            isInStatusCell = YES;
-            break;
-        }
-        parent = parent.superview;
-        levels++;
-    }
-    
-    if (isInStatusCell) {
-        UIColor *customTint = getSystemTintColor();
-        if (customTint) {
-            self.textColor = customTint;
-        }
-    }
-}
-
 - (void)layoutSubviews {
     %orig;
     
@@ -2926,7 +2961,16 @@ same things too, like the blur. */
         return;
     }
     
-    // Check if we're in a CKTranscriptStatusCell
+    // Handle Report Junk button
+    if ([self.text isEqualToString:@"Report Junk"]) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.textColor = customTint;
+        }
+        return;
+    }
+    
+    // Existing CKTranscriptStatusCell logic
     UIView *parent = self.superview;
     BOOL isInStatusCell = NO;
     int levels = 0;
@@ -3219,6 +3263,107 @@ same things too, like the blur. */
             
             self.backgroundColor = [UIColor clearColor];
         }
+    }
+}
+
+%end
+
+%hook _UISystemBackgroundView
+
+- (void)setConfiguration:(id)configuration {
+    %orig(configuration);
+
+    if (!isTweakEnabled()) return;
+
+    // Hide ONLY the drawable UIView subview
+    for (UIView *sub in self.subviews) {
+        if (![sub isKindOfClass:[UIView class]]) continue;
+        if ([sub isKindOfClass:[UIImageView class]]) continue;
+
+        sub.hidden = YES;
+        break;
+    }
+}
+
+%end
+
+%hook CKTranscriptReportSpamCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Find and color the Report Junk button
+    [self colorReportJunkButton:self withColor:customTint];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Find and color the Report Junk button
+    [self colorReportJunkButton:self withColor:customTint];
+}
+
+%new
+- (void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color {
+    // Check if this view is a UIButtonLabel with "Report Junk" text
+    if ([view isKindOfClass:%c(UIButtonLabel)]) {
+        UILabel *label = (UILabel *)view;
+        if ([label.text isEqualToString:@"Report Junk"]) {
+            label.textColor = color;
+        }
+    }
+    
+    // Recursively check all subviews
+    for (UIView *subview in view.subviews) {
+        [self colorReportJunkButton:subview withColor:color];
+    }
+}
+
+%end
+
+%hook CKAggregateAcknowledgementGradientBalloonView
+
+// Hide any CKGradientView inside this balloon on layout
+- (void)layoutSubviews {
+    %orig;
+
+    if (!isTweakEnabled()) return;
+
+    // Traverse subviews recursively
+    for (UIView *subview in self.subviews) {
+        [self hideGradientRecursively:subview];
+    }
+}
+
+// Recursive hiding helper
+%new
+- (void)hideGradientRecursively:(UIView *)view {
+    if ([view isKindOfClass:%c(CKGradientView)]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            view.hidden = YES;
+        });
+    }
+
+    for (UIView *subview in view.subviews) {
+        [self hideGradientRecursively:subview];
     }
 }
 

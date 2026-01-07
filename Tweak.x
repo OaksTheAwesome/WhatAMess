@@ -151,9 +151,6 @@ inherits attributes from UILabel*/
 @interface UIButtonLabel : UILabel
 @end
 
-@interface CKAggregateAcknowledgementBalloonView : UIView
-@end
-
 @interface _UIPlatterClippingView : UIView
 @end
 
@@ -167,10 +164,25 @@ inherits attributes from UILabel*/
 - (void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color;
 @end
 
-@interface CKAggregateAcknowledgementGradientBalloonView : UIView
-- (void)hideGradientRecursively:(UIView *)view;
+@interface CKThumbsUpAcknowledgmentGlyphView : UIView
 @end
 
+@interface CKAggregateAcknowledgementBalloonView : UIView
+- (void)applyGlyphTintRecursively:(UIView *)view;
+@end
+
+@interface CKAcknowledgmentGlyphImageView : UIView
+@property (nonatomic, strong) UIColor *tintColor;
+- (void)setImage:(UIImage *)image;
+@end
+
+@interface CKTranscriptUnavailabilityIndicatorCell : UICollectionViewCell
+- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
+- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
+@end
+
+@interface CKSendMenuPresentationPopoverBackdropView : UIView
+@end
 
 /* ===================
   PREFERENCE THINGS 
@@ -303,6 +315,18 @@ BOOL isMessageInputTextEnabled() {
 BOOL isMessageBarButtonsEnabled() {
     NSDictionary *prefs = loadPrefs();
     return prefs[@"isMessageBarButtonsEnabled"] ? [prefs[@"isMessageBarButtonsEnabled"] boolValue] : NO;
+}
+
+BOOL isiOS17OrHigher() {
+    NSOperatingSystemVersion iOS17 = {17, 0, 0};
+    return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS17];
+}
+
+BOOL isDarkMode() {
+    if (@available(iOS 13.0, *)) {
+        return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+    }
+    return NO;
 }
 
 /* Checks the amount of blur to apply to image based on user slider input. 
@@ -993,6 +1017,7 @@ changes.*/
 text colors are enabled. Checks if image view is inside CKConvListCollectionViewConvCell. If in such cell,
 sets tint color, if not, calls original method.*/
 %hook UIImageView
+
 - (void)setTintColor:(UIColor *)color {
     if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
         %orig;
@@ -1028,17 +1053,26 @@ sets tint color, if not, calls original method.*/
     // Check if this is an unread indicator in conversation list
     UIView *parent = self.superview;
     BOOL isUnreadIndicator = NO;
+    BOOL isInIndicatorCell = NO;
     int levels = 0;
     
-    while (parent && levels < 5) {
-        if ([parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
+    while (parent && levels < 10) {
+        // Check for unread indicator (only need to check first 5 levels)
+        if (levels < 5 && [parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
             isUnreadIndicator = YES;
-            break;
         }
+        
+        // Check for DND indicator cell
+        if ([parent isKindOfClass:%c(CKTranscriptUnavailabilityIndicatorCell)]) {
+            isInIndicatorCell = YES;
+            break; // Found it, no need to continue
+        }
+        
         parent = parent.superview;
         levels++;
     }
     
+    // Handle unread indicator
     if (isUnreadIndicator) {
         // Only apply to small images (unread indicators are typically 8-12 points)
         // Contact images are much larger (40+ points)
@@ -1052,8 +1086,26 @@ sets tint color, if not, calls original method.*/
                 self.tintColor = customTint;
             }
         }
+        return; // Exit early since we handled this case
+    }
+    
+    // Handle DND moon icon
+    if (isInIndicatorCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            UIColor *indicatorColor = [customTint colorWithAlphaComponent:0.75];
+            
+            // Force template rendering
+            UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            self.image = templateImage;
+            self.tintColor = indicatorColor;
+            
+            logToFile([NSString stringWithFormat:@"UIImageView hook: Applied color to DND moon icon - size: %.1f x %.1f", 
+                      self.frame.size.width, self.frame.size.height]);
+        }
     }
 }
+
 %end
 
 /* Hooks the navigation bar background and removes any defualt blurs. Creates a new blur effect and expands
@@ -1234,15 +1286,28 @@ across messages app. Replaces the title with a custom user string and sets a cus
 
     if (!isTweakEnabled()) return;
 
+    // Check direct subviews
     for (UIView *sub in self.subviews) {
-        if (![sub isKindOfClass:[UILabel class]]) continue;
-
-        UILabel *label = (UILabel *)sub;
-
-        // Only change the title if it's the main Messages title
-        if ([label.text isEqualToString:@"Messages"]) {
-            label.text = getConversationListTitle();           // Custom text
-            label.textColor = getConversationListTitleColor(); // Custom color
+        // Check if it's a UILabel directly
+        if ([sub isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)sub;
+            if ([label.text isEqualToString:@"Messages"]) {
+                label.text = getConversationListTitle();
+                label.textColor = getConversationListTitleColor();
+            }
+        }
+        
+        // iOS 17: Check if it's a UIView container with a UILabel inside
+        if ([sub isKindOfClass:[UIView class]]) {
+            for (UIView *subview in sub.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    if ([label.text isEqualToString:@"Messages"]) {
+                        label.text = getConversationListTitle();
+                        label.textColor = getConversationListTitleColor();
+                    }
+                }
+            }
         }
     }
 }
@@ -1674,7 +1739,7 @@ same things too, like the blur. */
         return;
     }
 
-    // 🔒 FIX 1: PREVENT BLACK FLASH (CRITICAL)
+    // PREVENT BLACK FLASH
     effectView.backgroundColor = [UIColor clearColor];
     effectView.contentView.backgroundColor = [UIColor clearColor];
     effectView.opaque = NO;
@@ -1682,12 +1747,12 @@ same things too, like the blur. */
     self.backgroundColor = [UIColor clearColor];
     self.opaque = NO;
 
-    // 🔒 FIX 2: FORCE EFFECT TO EXIST BEFORE FIRST DRAW
+    // FORCE EFFECT TO EXIST BEFORE FIRST DRAW
     if (!effectView.effect) {
         effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     }
 
-    // 🔒 FIX 3: DISABLE IMPLICIT ANIMATIONS (FRAME EXPANSION)
+    // DISABLE IMPLICIT ANIMATIONS (FRAME EXPANSION)
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
 
@@ -1699,11 +1764,6 @@ same things too, like the blur. */
 
     [CATransaction commit];
 
-    // Apply gradient blur to message bar only
-    // (Safe to reassign — effect is already non-nil now)
-   if (!effectView.effect) {
-    effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
-}
     self.alpha = 1.0;
     
     // Apply gradient mask
@@ -1754,7 +1814,6 @@ same things too, like the blur. */
 
     if (!isInMessageInput || isInKeyboard || !effectView) return;
 
-    // ✅ SAFE: backdrop views do not participate in snapshots
     effectView.opaque = NO;
     effectView.backgroundColor = [UIColor clearColor];
     effectView.contentView.backgroundColor = [UIColor clearColor];
@@ -1763,6 +1822,42 @@ same things too, like the blur. */
         effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     }
 }
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
+        %orig;
+        return;
+    }
+    
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        NSString *className = NSStringFromClass([parent class]);
+        
+        if ([className containsString:@"Keyboard"] || 
+            [className isEqualToString:@"UIKBVisualEffectView"] ||
+            [className isEqualToString:@"UIInputView"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([className isEqualToString:@"CKMessageEntryView"]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        %orig([UIColor clearColor]);
+        return;
+    }
+    
+    %orig;
+}
+
 %end
 
 %hook _UIVisualEffectContentView
@@ -1836,6 +1931,43 @@ same things too, like the blur. */
 
 %hook _UIVisualEffectSubview
 
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check parent hierarchy
+    UIView *parent = self.superview;
+    BOOL isInMessageInput = NO;
+    BOOL isInKeyboard = NO;
+    int levels = 0;
+    
+    while (parent && levels < 15) {
+        NSString *className = NSStringFromClass([parent class]);
+        
+        if ([className containsString:@"Keyboard"] || 
+            [className isEqualToString:@"UIKBVisualEffectView"] ||
+            [className isEqualToString:@"UIInputView"]) {
+            isInKeyboard = YES;
+            break;
+        }
+        if ([className isEqualToString:@"CKMessageEntryView"]) {
+            isInMessageInput = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInMessageInput && !isInKeyboard) {
+        // Always force clear color, regardless of what iOS is trying to set
+        %orig([UIColor clearColor]);
+        return;
+    }
+    
+    %orig;
+}
+
 - (void)layoutSubviews {
     %orig;
     
@@ -1843,20 +1975,21 @@ same things too, like the blur. */
         return;
     }
     
-    // Check if we're in the message input area BUT NOT the keyboard
     UIView *parent = self.superview;
     BOOL isInMessageInput = NO;
     BOOL isInKeyboard = NO;
     int levels = 0;
     
     while (parent && levels < 15) {
-        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
-            [parent isKindOfClass:%c(UIInputView)] ||
-            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+        NSString *className = NSStringFromClass([parent class]);
+        
+        if ([className containsString:@"Keyboard"] || 
+            [className isEqualToString:@"UIKBVisualEffectView"] ||
+            [className isEqualToString:@"UIInputView"]) {
             isInKeyboard = YES;
             break;
         }
-        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+        if ([className isEqualToString:@"CKMessageEntryView"]) {
             isInMessageInput = YES;
         }
         parent = parent.superview;
@@ -1865,30 +1998,32 @@ same things too, like the blur. */
     
     if (isInMessageInput && !isInKeyboard) {
         self.backgroundColor = [UIColor clearColor];
-        self.layer.mask = nil;
     }
 }
 
-- (void)setBackgroundColor:(UIColor *)backgroundColor {
+- (void)didMoveToWindow {
+    %orig;
+    
     if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
-        %orig;
         return;
     }
     
-    // Check if we're in the message input area
+    // Check parent hierarchy
     UIView *parent = self.superview;
     BOOL isInMessageInput = NO;
     BOOL isInKeyboard = NO;
     int levels = 0;
     
     while (parent && levels < 15) {
-        if ([parent isKindOfClass:%c(UIKBVisualEffectView)] || 
-            [parent isKindOfClass:%c(UIInputView)] ||
-            [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
+        NSString *className = NSStringFromClass([parent class]);
+        
+        if ([className containsString:@"Keyboard"] || 
+            [className isEqualToString:@"UIKBVisualEffectView"] ||
+            [className isEqualToString:@"UIInputView"]) {
             isInKeyboard = YES;
             break;
         }
-        if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
+        if ([className isEqualToString:@"CKMessageEntryView"]) {
             isInMessageInput = YES;
         }
         parent = parent.superview;
@@ -1896,12 +2031,10 @@ same things too, like the blur. */
     }
     
     if (isInMessageInput && !isInKeyboard) {
-        %orig([UIColor clearColor]);
-        return;
+        self.backgroundColor = [UIColor clearColor];
     }
-    
-    %orig;
 }
+
 %end
 
 %hook CKMessageEntryView
@@ -3121,6 +3254,11 @@ same things too, like the blur. */
             }
         }
     }
+    
+    // Handle glyph coloring if custom bubble colors are enabled
+    if (isCustomBubbleColorsEnabled()) {
+        [self applyGlyphTintRecursively:self];
+    }
 }
 
 - (void)setTintColor:(UIColor *)color {
@@ -3138,6 +3276,11 @@ same things too, like the blur. */
             if ([subview isKindOfClass:[UIImageView class]]) {
                 subview.tintColor = customTint;
             }
+        }
+        
+        // Handle glyph coloring if custom bubble colors are enabled
+        if (isCustomBubbleColorsEnabled()) {
+            [self applyGlyphTintRecursively:self];
         }
         return;
     }
@@ -3162,6 +3305,53 @@ same things too, like the blur. */
                 subview.tintColor = customTint;
             }
         }
+    }
+    
+    // Handle glyph coloring if custom bubble colors are enabled
+    if (isCustomBubbleColorsEnabled()) {
+        [self applyGlyphTintRecursively:self];
+    }
+}
+
+%new
+- (void)applyGlyphTintRecursively:(UIView *)view {
+    // Get lightened, desaturated system tint for glyphs
+    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0]; // fallback
+    UIColor *systemTint = getSystemTintColor();
+    
+    if (systemTint) {
+        CGFloat h, s, b, a;
+        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            s *= 0.2;              // desaturate to 30%
+            b = MIN(1.0, b + 0.2); // lighten by 40%
+            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+        }
+    }
+    
+    // Apply to CKAcknowledgmentGlyphImageView
+    if ([view isKindOfClass:%c(CKAcknowledgmentGlyphImageView)]) {
+        view.tintColor = glyphTint;
+        
+        // Force template rendering via KVC
+        UIImage *img = [view valueForKey:@"_image"];
+        if (img && img.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+            img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            [view setValue:img forKey:@"_image"];
+        }
+        
+        logToFile([NSString stringWithFormat:@"Applied glyph tint: %@", glyphTint]);
+    }
+    
+    // Also try CKThumbsUpAcknowledgmentGlyphView and similar
+    NSString *className = NSStringFromClass([view class]);
+    if ([className containsString:@"AcknowledgmentGlyphView"]) {
+        view.tintColor = glyphTint;
+        logToFile([NSString stringWithFormat:@"Applied tint to %@", className]);
+    }
+    
+    // Recurse through all subviews
+    for (UIView *subview in view.subviews) {
+        [self applyGlyphTintRecursively:subview];
     }
 }
 
@@ -3339,31 +3529,317 @@ same things too, like the blur. */
 
 %end
 
-%hook CKAggregateAcknowledgementGradientBalloonView
+%hook CKAcknowledgmentGlyphImageView
 
-// Hide any CKGradientView inside this balloon on layout
-- (void)layoutSubviews {
+- (void)setImage:(UIImage *)image {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) {
+        %orig;
+        return;
+    }
+    
+    // Get lightened, desaturated system tint
+    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
+    UIColor *systemTint = getSystemTintColor();
+    
+    if (systemTint) {
+        CGFloat h, s, b, a;
+        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            s *= 0.3;
+            b = MIN(1.0, b + 0.4);
+            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+        }
+    }
+    
+    // Create a tinted version of the image using Core Graphics
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    
+    // Flip the context because Core Graphics uses a different coordinate system
+    CGContextTranslateCTM(context, 0, image.size.height);
+    CGContextScaleCTM(context, 1.0, -1.0);
+    
+    // Draw the image
+    CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
+    CGContextDrawImage(context, rect, image.CGImage);
+    
+    // Apply the tint color using blend mode
+    CGContextSetBlendMode(context, kCGBlendModeSourceIn);
+    [glyphTint setFill];
+    CGContextFillRect(context, rect);
+    
+    UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    %orig(tintedImage);
+    logToFile([NSString stringWithFormat:@"Applied Core Graphics tint to glyph image"]);
+}
+
+- (void)didMoveToSuperview {
     %orig;
-
-    if (!isTweakEnabled()) return;
-
-    // Traverse subviews recursively
-    for (UIView *subview in self.subviews) {
-        [self hideGradientRecursively:subview];
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.superview) {
+        return;
+    }
+    
+    // Force image refresh
+    UIImage *currentImage = [self valueForKey:@"_image"];
+    if (currentImage) {
+        [self setImage:currentImage];
     }
 }
 
-// Recursive hiding helper
-%new
-- (void)hideGradientRecursively:(UIView *)view {
-    if ([view isKindOfClass:%c(CKGradientView)]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            view.hidden = YES;
-        });
-    }
+%end
 
+%hook CKThumbsUpAcknowledgmentGlyphView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Get lightened, desaturated system tint
+    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
+    UIColor *systemTint = getSystemTintColor();
+    
+    if (systemTint) {
+        CGFloat h, s, b, a;
+        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            s *= 0.3;
+            b = MIN(1.0, b + 0.4);
+            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+        }
+    }
+    
+    self.tintColor = glyphTint;
+    
+    // Apply to all subviews
+    for (UIView *subview in self.subviews) {
+        subview.tintColor = glyphTint;
+    }
+    
+    logToFile(@"CKThumbsUpAcknowledgmentGlyphView - applied tint");
+}
+
+%end
+
+%hook CKTranscriptUnavailabilityIndicatorCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Apply alpha to the tint color
+    UIColor *indicatorColor = [customTint colorWithAlphaComponent:0.75];
+    
+    // Find and color the label and icon
+    [self applyColorToUnavailabilityIndicator:self.contentView withColor:indicatorColor];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    UIColor *indicatorColor = [customTint colorWithAlphaComponent:0.75];
+    [self applyColorToUnavailabilityIndicator:self.contentView withColor:indicatorColor];
+}
+
+%new
+- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color {
+    // Check if this view is a UILabel
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        
+        // Set the text color
+        label.textColor = color;
+        
+        // Check if the label has attributed text (which contains the moon icon)
+        if (label.attributedText) {
+            NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:label.attributedText];
+            
+            // Enumerate through the attributed string to find NSTextAttachment
+            [attrString enumerateAttribute:NSAttachmentAttributeName 
+                                   inRange:NSMakeRange(0, attrString.length) 
+                                   options:0 
+                                usingBlock:^(id value, NSRange range, BOOL *stop) {
+                if ([value isKindOfClass:[NSTextAttachment class]]) {
+                    NSTextAttachment *attachment = (NSTextAttachment *)value;
+                    UIImage *originalImage = attachment.image;
+                    
+                    if (originalImage) {
+                        // Create template version and tint it
+                        UIImage *templateImage = [originalImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                        UIImage *tintedImage = [templateImage imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
+                        attachment.image = tintedImage;
+                        
+                        logToFile(@"Found and colored NSTextAttachment moon icon");
+                    }
+                }
+            }];
+            
+            // Apply foreground color to text
+            [attrString addAttribute:NSForegroundColorAttributeName 
+                               value:color 
+                               range:NSMakeRange(0, attrString.length)];
+            
+            label.attributedText = attrString;
+            
+            logToFile([NSString stringWithFormat:@"Applied color to unavailability indicator with attributed text: %@", label.text]);
+        } else {
+            logToFile([NSString stringWithFormat:@"Applied color to unavailability indicator label: %@", label.text]);
+        }
+    }
+    
+    // Recursively check all subviews
     for (UIView *subview in view.subviews) {
-        [self hideGradientRecursively:subview];
+        [self applyColorToUnavailabilityIndicator:subview withColor:color];
+    }
+}
+
+%end
+
+
+/* iOS 17 Specific Hooks */
+
+%hook CKSendMenuPresentationPopoverBackdropView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Create an adjusted version of the accent color based on light/dark mode
+    CGFloat h, s, b, a;
+    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        // Adjust saturation slightly (increase by 10%)
+        s = MIN(1.0, s * 1.1);
+        
+        // Adjust brightness based on light/dark mode
+        if (isDarkMode()) {
+            b *= 0.5; // Darken to 50% brightness in dark mode
+        } else {
+            b = MIN(1.0, b * 1.2); // Lighten to 150% brightness in light mode
+        }
+        
+        UIColor *adjustedColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+        self.backgroundColor = adjustedColor;
+        
+        logToFile([NSString stringWithFormat:@"Applied adjusted accent color to CKSendMenuPresentationPopoverBackdropView: %@ (dark mode: %d)", 
+                  adjustedColor, isDarkMode()]);
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        %orig;
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        %orig;
+        return;
+    }
+    
+    // Create an adjusted version of the accent color based on light/dark mode
+    CGFloat h, s, b, a;
+    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        s = MIN(1.0, s * 1.1);
+        
+        if (isDarkMode()) {
+            b *= 0.5; // Darken to 50% in dark mode
+        } else {
+            b = MIN(1.0, b * 1.2); // Lighten to 150% in light mode
+        }
+        
+        UIColor *adjustedColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+        %orig(adjustedColor);
+        return;
+    }
+    
+    %orig;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Verify we're in the correct view hierarchy
+    UIView *parent = self.superview;
+    BOOL isCorrectHierarchy = NO;
+    int levels = 0;
+    
+    while (parent && levels < 5) {
+        if ([parent isKindOfClass:%c(CKSendMenuPopoverPresentationDimmingView)] ||
+            [parent isKindOfClass:%c(CKSendMenuPresentationPopoverView)]) {
+            isCorrectHierarchy = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isCorrectHierarchy) {
+        CGFloat h, s, b, a;
+        if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            s = MIN(1.0, s * 1.1);
+            
+            if (isDarkMode()) {
+                b *= 0.5; // Darken to 50% in dark mode
+            } else {
+                b = MIN(1.0, b * 1.2); // Lighten to 150% in light mode
+            }
+            
+            UIColor *adjustedColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            self.backgroundColor = adjustedColor;
+        }
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        return;
+    }
+    
+    // Reapply color when switching between light/dark mode
+    if (@available(iOS 13.0, *)) {
+        if (self.traitCollection.userInterfaceStyle != previousTraitCollection.userInterfaceStyle) {
+            [self setNeedsLayout];
+        }
     }
 }
 

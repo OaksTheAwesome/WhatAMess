@@ -75,6 +75,7 @@ inherits attributes from UILabel*/
 
 @interface CKBalloonTextView : UITextView
 - (void)updateTextColorForBalloon;
+- (UIColor *)getCustomTextColor;
 @end
 
 @interface CKTranscriptStatusCell : UICollectionViewCell
@@ -106,9 +107,6 @@ inherits attributes from UILabel*/
 @end
 
 @interface CKDetailsTableView : UITableView
-@end
-
-@interface CKSearchCollectionView : UICollectionView
 @end
 
 @interface _UITableViewHeaderFooterContentView : UIView
@@ -182,6 +180,24 @@ inherits attributes from UILabel*/
 @end
 
 @interface CKSendMenuPresentationPopoverBackdropView : UIView
+@end
+
+@interface CKSearchCollectionView : UICollectionView
+@end
+
+@interface UINavigationButton : UIView
+@end
+
+@interface _UINavigationBarLargeTitleView : UIView
+@end
+
+@interface UIViewControllerWrapperView : UIView
+@end
+
+@interface CKTranscriptNotifyAnywayButtonCell : UICollectionViewCell
+@end
+
+@interface CKEntryViewBlurrableButtonContainer : UIView
 @end
 
 /* ===================
@@ -987,16 +1003,27 @@ changes.*/
         } else if ([self isKindOfClass:[UILabel class]]) {
             %orig(getMessagePreviewTextColor());
         } else {
-			%orig;
-		}
-		return;
+            %orig;
+        }
+        return;
     }
     
     // Then check timestamp cells (only if NOT in conversation cell)
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
-        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)] || [parent isKindOfClass:%c(CKTranscriptLabelCell)]) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            // CKTranscriptStatusCell labels use system tint (Edited, GIPHY, etc.)
+            UIColor *customTint = getSystemTintColor();
+            if (customTint) {
+                %orig(customTint);
+                return;
+            }
+            break;
+        }
+        
+        if ([parent isKindOfClass:%c(CKTranscriptLabelCell)]) {
+            // CKTranscriptLabelCell labels use timestamp color (Today, dates, etc.)
             UIColor *timestampColor = pickTimestampTextColor();
             if (timestampColor) {
                 %orig(timestampColor);
@@ -1004,11 +1031,159 @@ changes.*/
             }
             break;
         }
+        
         parent = parent.superview;
         levels++;
     }
     
-	%orig;
+    // Check for "Edited" label in iOS 17 (UILabel inside _UISystemBackgroundView)
+    if ([self.text isEqualToString:@"Edited"] && [self.superview isKindOfClass:%c(_UISystemBackgroundView)]) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            %orig(customTint);
+            return;
+        }
+    }
+    
+    // Check for "Edited" label in sent messages (walks up parent hierarchy)
+    if ([self.text isEqualToString:@"Edited"]) {
+        UIView *parent = self.superview;
+        BOOL isInStatusCell = NO;
+        int levels = 0;
+        
+        while (parent && levels < 7) {
+            if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+                isInStatusCell = YES;
+                break;
+            }
+            parent = parent.superview;
+            levels++;
+        }
+        
+        if (isInStatusCell) {
+            UIColor *customTint = getSystemTintColor();
+            if (customTint) {
+                %orig(customTint);
+                return;
+            }
+        }
+    }
+    
+    %orig;
+}
+
+- (void)setText:(NSString *)text {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Handle labels in CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 7) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            // If it has attributed text, color the entire string
+            if (self.attributedText) {
+                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
+                [attrString addAttribute:NSForegroundColorAttributeName 
+                                   value:customTint 
+                                   range:NSMakeRange(0, attrString.length)];
+                self.attributedText = attrString;
+            } else {
+                self.textColor = customTint;
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    // Handle labels in CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 7) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            // If it has attributed text, color the entire string
+            if (self.attributedText) {
+                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
+                [attrString addAttribute:NSForegroundColorAttributeName 
+                                   value:customTint 
+                                   range:NSMakeRange(0, attrString.length)];
+                self.attributedText = attrString;
+            } else {
+                self.textColor = customTint;
+            }
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Handle labels in CKTranscriptStatusCell
+    UIView *parent = self.superview;
+    BOOL isInStatusCell = NO;
+    int levels = 0;
+    
+    while (parent && levels < 7) {
+        if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
+            isInStatusCell = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInStatusCell) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            // If it has attributed text, color the entire string
+            if (self.attributedText) {
+                NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
+                [attrString addAttribute:NSForegroundColorAttributeName 
+                                   value:customTint 
+                                   range:NSMakeRange(0, attrString.length)];
+                self.attributedText = attrString;
+            } else {
+                self.textColor = customTint;
+            }
+        }
+    }
 }
 
 %end
@@ -1610,36 +1785,126 @@ same things too, like the blur. */
     [self updateTextColorForBalloon];
 }
 
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    [self updateTextColorForBalloon];
+}
+
+- (void)setTextColor:(UIColor *)textColor {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're currently updating to prevent recursion
+    NSNumber *isUpdating = objc_getAssociatedObject(self, @selector(setTextColor:));
+    if (isUpdating && [isUpdating boolValue]) {
+        %orig;
+        return;
+    }
+    
+    // Get the appropriate color for this balloon
+    UIColor *customTextColor = [self getCustomTextColor];
+    
+    if (customTextColor && ![textColor isEqual:customTextColor]) {
+        objc_setAssociatedObject(self, @selector(setTextColor:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        %orig(customTextColor);
+        objc_setAssociatedObject(self, @selector(setTextColor:), @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
+    
+    %orig;
+}
+
+- (void)setTintColor:(UIColor *)tintColor {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're currently updating to prevent recursion
+    NSNumber *isUpdating = objc_getAssociatedObject(self, @selector(setTintColor:));
+    if (isUpdating && [isUpdating boolValue]) {
+        %orig;
+        return;
+    }
+    
+    // Get the appropriate color for this balloon
+    UIColor *customTextColor = [self getCustomTextColor];
+    
+    if (customTextColor && ![tintColor isEqual:customTextColor]) {
+        objc_setAssociatedObject(self, @selector(setTintColor:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        %orig(customTextColor);
+        objc_setAssociatedObject(self, @selector(setTintColor:), @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
+    
+    %orig;
+}
+
 %new
-- (void)updateTextColorForBalloon {
-    // Search for CKTextBalloonView (which inherits from CKColoredBalloonView)
-    CKColoredBalloonView *balloonView = nil;
+- (UIColor *)getCustomTextColor {
+    // Check if this is inside a reply balloon
     UIView *parent = self.superview;
     int levels = 0;
     
     while (parent && levels < 10) {
+        NSString *className = NSStringFromClass([parent class]);
+        if ([className containsString:@"Reply"] || [className containsString:@"reply"]) {
+            return getSystemTintColor();
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    // Search for CKColoredBalloonView
+    parent = self.superview;
+    levels = 0;
+    
+    while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKColoredBalloonView)]) {
-            balloonView = (CKColoredBalloonView *)parent;
+            CKColoredBalloonView *balloonView = (CKColoredBalloonView *)parent;
+            
+            if (balloonView.color == -1) {
+                return getReceivedTextColor();
+            } else if (balloonView.color == 1) {
+                return getSentTextColor();
+            } else if (balloonView.color == 0) {
+                return getSMSSentTextColor();
+            }
             break;
         }
         parent = parent.superview;
         levels++;
     }
     
-    if (balloonView) {
-        UIColor *textColor = nil;
+    return nil;
+}
+
+%new
+- (void)updateTextColorForBalloon {
+    UIColor *textColor = [self getCustomTextColor];
+    
+    if (textColor) {
+        objc_setAssociatedObject(self, @selector(setTextColor:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, @selector(setTintColor:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         
-        if (balloonView.color == -1) {
-            textColor = getReceivedTextColor();
-        } else if (balloonView.color == 1) {
-            textColor = getSentTextColor();
-        } else if (balloonView.color == 0) {
-            textColor = getSMSSentTextColor();
-        }
+        self.textColor = textColor;
+        self.tintColor = textColor;
         
-        if (textColor && ![self.textColor isEqual:textColor]) {
-            self.textColor = textColor;
-        }
+        // Set link text attributes to match the text color
+        self.linkTextAttributes = @{
+            NSForegroundColorAttributeName: textColor,
+            NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle)
+        };
+        
+        objc_setAssociatedObject(self, @selector(setTextColor:), @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, @selector(setTintColor:), @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
 
@@ -2387,19 +2652,18 @@ same things too, like the blur. */
 %end
 
 %hook CKSearchCollectionView
-
 - (void)didMoveToWindow {
     %orig;
-    
+
     if (!isTweakEnabled()) {
         return;
     }
-    
+
     // Check if we're in CKDetailsTableView
     UIView *parent = self.superview;
     BOOL isInDetailsView = NO;
     int levels = 0;
-    
+
     while (parent && levels < 15) {
         if ([parent isKindOfClass:%c(CKDetailsTableView)]) {
             isInDetailsView = YES;
@@ -2408,13 +2672,43 @@ same things too, like the blur. */
         parent = parent.superview;
         levels++;
     }
-    
+
     if (isInDetailsView) {
         self.backgroundColor = [UIColor clearColor];
+        return;
+    }
+
+    // Apply conversation list background for main search view
+    if (isConvColorBgEnabled()) {
+        UIColor *bgColor = getBackgroundColor();
+        if (bgColor) {
+            self.backgroundColor = bgColor;
+            self.backgroundView = nil; // Remove any image background
+        }
+    } else {
+        // Apply image background from file path
+        BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kImagePath];
+        UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kImagePath] : nil;
+        
+        if (bgImage) {
+            CGFloat blurAmount = getImageBlurAmount();
+            if (blurAmount > 0) {
+                bgImage = blurImage(bgImage, blurAmount);
+            }
+            
+            UIImageView *imageView = [[UIImageView alloc] initWithImage:bgImage];
+            imageView.contentMode = UIViewContentModeScaleAspectFill;
+            imageView.clipsToBounds = YES;
+            imageView.frame = self.bounds;
+            imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            
+            self.backgroundView = imageView;
+            self.backgroundColor = [UIColor clearColor];
+        }
     }
 }
-
 %end
+
 /* Hook for table header/footer content view - make transparent */
 %hook _UITableViewHeaderFooterContentView
 
@@ -3715,6 +4009,159 @@ same things too, like the blur. */
 
 %end
 
+%hook UINavigationButton
+
+- (void)setTintColor:(UIColor *)color {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // Check if we're in the search bar
+    UIView *parent = self.superview;
+    BOOL isInSearchBar = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(_UISearchBarSearchContainerView)] ||
+            [parent isKindOfClass:%c(UISearchBarBackground)]) {
+            isInSearchBar = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInSearchBar) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            %orig(customTint);
+            return;
+        }
+    }
+    
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    // Check if we're in the search bar
+    UIView *parent = self.superview;
+    BOOL isInSearchBar = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(_UISearchBarSearchContainerView)] ||
+            [parent isKindOfClass:%c(UISearchBarBackground)]) {
+            isInSearchBar = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInSearchBar) {
+        UIColor *customTint = getSystemTintColor();
+        if (customTint) {
+            self.tintColor = customTint;
+        }
+    }
+}
+
+%end
+
+%hook CKTranscriptNotifyAnywayButtonCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Find and color the Notify Anyway button
+    for (UIView *subview in self.contentView.subviews) {
+        if ([subview isKindOfClass:[UIButton class]]) {
+            UIButton *button = (UIButton *)subview;
+            button.tintColor = customTint;
+            
+            // Force update the button's appearance
+            [button setNeedsLayout];
+            [button layoutIfNeeded];
+            
+            // Also apply to button label if it exists
+            for (UIView *btnSubview in button.subviews) {
+                if ([btnSubview isKindOfClass:%c(UIButtonLabel)]) {
+                    [(UILabel *)btnSubview setTextColor:customTint];
+                }
+            }
+            
+            logToFile(@"Applied custom tint to Notify Anyway button");
+            break;
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Find and color the Notify Anyway button
+    for (UIView *subview in self.contentView.subviews) {
+        if ([subview isKindOfClass:[UIButton class]]) {
+            UIButton *button = (UIButton *)subview;
+            button.tintColor = customTint;
+            
+            // Force update the button's appearance
+            [button setNeedsLayout];
+            [button layoutIfNeeded];
+            
+            // Also apply to button label if it exists
+            for (UIView *btnSubview in button.subviews) {
+                if ([btnSubview isKindOfClass:%c(UIButtonLabel)]) {
+                    [(UILabel *)btnSubview setTextColor:customTint];
+                }
+            }
+            
+            logToFile(@"Applied custom tint to Notify Anyway button in didMoveToWindow");
+            break;
+        }
+    }
+}
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.superview) {
+        return;
+    }
+    
+    // Trigger a layout update after a brief delay to ensure the button is fully configured
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    });
+}
+
+%end
 
 /* iOS 17 Specific Hooks */
 
@@ -3841,6 +4288,248 @@ same things too, like the blur. */
             [self setNeedsLayout];
         }
     }
+}
+
+%end
+
+%hook _UINavigationBarLargeTitleView
+
+- (void)layoutSubviews {
+    %orig;
+
+    if (!isTweakEnabled() || !isiOS17OrHigher()) return;
+
+    // Find the UILabel in the large title view
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            if ([label.text isEqualToString:@"Messages"]) {
+                label.text = getConversationListTitle();
+                label.textColor = getConversationListTitleColor();
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) return;
+    
+    // Apply immediately when view appears
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            if ([label.text isEqualToString:@"Messages"]) {
+                label.text = getConversationListTitle();
+                label.textColor = getConversationListTitleColor();
+            }
+        }
+    }
+}
+
+%end
+
+%hook UIViewControllerWrapperView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        return;
+    }
+    
+    if (!self.window) {
+        return;
+    }
+    
+    // Check if this is the "No Conversation Selected" view by examining the hierarchy
+    UIView *parent = self.superview;
+    BOOL isNoConversationView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        NSString *className = NSStringFromClass([parent class]);
+        if ([className containsString:@"UINavigationTransitionView"] ||
+            [className containsString:@"UILayoutContainerView"] ||
+            [className containsString:@"UIPanelControllerContentView"]) {
+            isNoConversationView = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isNoConversationView) {
+        return;
+    }
+    
+    // Find the UIView child (the actual content view)
+    UIView *contentView = nil;
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIView class]] && 
+            ![subview isKindOfClass:[UIImageView class]]) {
+            contentView = subview;
+            break;
+        }
+    }
+    
+    if (!contentView) {
+        return;
+    }
+    
+    // Remove any existing background images
+    for (UIView *subview in [contentView.subviews copy]) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            UIImageView *imgView = (UIImageView *)subview;
+            if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) {
+                [imgView removeFromSuperview];
+            }
+        }
+    }
+    
+    // Apply the same background logic as chat view
+    BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+    UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+    
+    if (isChatColorBgEnabled()) {
+        contentView.backgroundColor = getChatBackgroundColor();
+    }
+    else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) {
+            chatBgImage = blurImage(chatBgImage, blurAmount);
+        }
+        
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:contentView.bounds];
+        imageView.image = chatBgImage;
+        imageView.contentMode = UIViewContentModeScaleAspectFill;
+        imageView.clipsToBounds = YES;
+        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [contentView insertSubview:imageView atIndex:0];
+        
+        contentView.backgroundColor = [UIColor clearColor];
+    } else {
+        contentView.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || isiOS17OrHigher()) {
+        return;
+    }
+    
+    // Check if this is the "No Conversation Selected" view
+    UIView *parent = self.superview;
+    BOOL isNoConversationView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        NSString *className = NSStringFromClass([parent class]);
+        if ([className containsString:@"UINavigationTransitionView"] ||
+            [className containsString:@"UILayoutContainerView"] ||
+            [className containsString:@"UIPanelControllerContentView"]) {
+            isNoConversationView = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isNoConversationView) {
+        return;
+    }
+    
+    // Update background image frame if it exists
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIView class]]) {
+            for (UIView *bgView in subview.subviews) {
+                if ([bgView isKindOfClass:[UIImageView class]]) {
+                    UIImageView *imgView = (UIImageView *)bgView;
+                    if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) {
+                        imgView.frame = subview.bounds;
+                    }
+                }
+            }
+        }
+    }
+}
+
+%end
+
+%hook CKEntryViewBlurrableButtonContainer
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Find the button directly (it's a direct subview)
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIButton class]]) {
+            UIButton *button = (UIButton *)subview;
+            CGSize buttonSize = button.frame.size;
+            
+            // Send button is 27.5 x 27.5
+            if (buttonSize.width > 27 && buttonSize.width < 28 && 
+                buttonSize.height > 27 && buttonSize.height < 28) {
+                
+                // Find and remove the existing UIImageView
+                for (UIView *btnSubview in [button.subviews copy]) {
+                    if ([btnSubview isKindOfClass:[UIImageView class]]) {
+                        [btnSubview removeFromSuperview];
+                        break;
+                    }
+                }
+                
+                // Set background to custom color
+                button.backgroundColor = customTint;
+                button.layer.cornerRadius = buttonSize.width / 2;
+                button.clipsToBounds = YES;
+                
+                // Create arrow overlay
+                UIImage *arrowImage = [UIImage systemImageNamed:@"arrow.up"];
+                if (arrowImage) {
+                    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+                    arrowImage = [arrowImage imageWithConfiguration:config];
+                    arrowImage = [arrowImage imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+                    
+                    UIImageView *arrowOverlay = [[UIImageView alloc] initWithImage:arrowImage];
+                    arrowOverlay.userInteractionEnabled = NO;
+                    
+                    CGSize arrowSize = arrowOverlay.bounds.size;
+                    arrowOverlay.frame = CGRectMake((buttonSize.width - arrowSize.width) / 2,
+                                                   (buttonSize.height - arrowSize.height) / 2,
+                                                   arrowSize.width,
+                                                   arrowSize.height);
+                    
+                    [button addSubview:arrowOverlay];
+                    
+                    logToFile(@"iOS 17: Applied custom color to send button");
+                }
+                
+                break; // Found and processed the send button, exit loop
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isiOS17OrHigher() || !self.window) {
+        return;
+    }
+    
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
 }
 
 %end

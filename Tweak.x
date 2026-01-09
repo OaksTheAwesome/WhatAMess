@@ -200,6 +200,16 @@ inherits attributes from UILabel*/
 @interface CKEntryViewBlurrableButtonContainer : UIView
 @end
 
+@interface LPFlippedView : UIView
+@end
+
+@interface LPTextView : UIView
+@end
+
+@interface LPImageView : UIView
+@end
+
+
 /* ===================
   PREFERENCE THINGS 
 ==================== */
@@ -708,6 +718,29 @@ static UIColor *getMessageBarButtonColor() {
     
     return colorFromHex(hexColor);
 }
+
+static UIColor *getLinkPreviewBackgroundColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"linkPreviewBackgroundColor"];
+    
+    if (!hexColor) {
+        return [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:1.0]; // Default dark gray
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getLinkPreviewTextColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"linkPreviewTextColor"];
+    
+    if (!hexColor) {
+        return [UIColor whiteColor]; // Default white
+    }
+    
+    return colorFromHex(hexColor);
+}
+
 
 /* ===========
     HOOKS 
@@ -4533,3 +4566,176 @@ same things too, like the blur. */
 }
 
 %end
+
+%hook LPFlippedView
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+    if (customLinkColor) {
+        %orig(customLinkColor);
+        return;
+    }
+    
+    %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+    if (customLinkColor) {
+        self.backgroundColor = customLinkColor;
+    }
+}
+
+%end
+
+%hook LPTextView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're inside LPFlippedView hierarchy
+    UIView *parent = self.superview;
+    BOOL isInLinkPreview = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(LPFlippedView)]) {
+            isInLinkPreview = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isInLinkPreview) {
+        return;
+    }
+    
+    UIColor *headerColor = getLinkPreviewTextColor();
+    if (!headerColor) {
+        return;
+    }
+    
+    // Apply colors to UILabels
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            
+            // Determine if this is header or subtext based on font size
+            // Header text is typically larger
+            if (label.font.pointSize > 14) {
+                // This is the header
+                label.textColor = headerColor;
+            } else {
+                // This is the subtext - desaturate and add transparency
+                CGFloat h, s, b, a;
+                if ([headerColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+                    s *= 0.6; // Reduce saturation to 60%
+                    UIColor *subtextColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:0.7];
+                    label.textColor = subtextColor;
+                }
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    // Check if we're inside LPFlippedView hierarchy
+    UIView *parent = self.superview;
+    BOOL isInLinkPreview = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:%c(LPFlippedView)]) {
+            isInLinkPreview = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isInLinkPreview) {
+        return;
+    }
+    
+    UIColor *headerColor = getLinkPreviewTextColor();
+    if (!headerColor) {
+        return;
+    }
+    
+    // Apply colors to UILabels
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            
+            if (label.font.pointSize > 14) {
+                label.textColor = headerColor;
+            } else {
+                CGFloat h, s, b, a;
+                if ([headerColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+                    s *= 0.6;
+                    UIColor *subtextColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:0.7];
+                    label.textColor = subtextColor;
+                }
+            }
+        }
+    }
+}
+
+%end
+
+%hook LPImageView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Make all UIView subviews transparent
+    for (UIView *subview in self.subviews) {
+        if ([subview class] == [UIView class]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    // Make all UIView subviews transparent
+    for (UIView *subview in self.subviews) {
+        if ([subview class] == [UIView class]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+}
+
+%end
+

@@ -81,6 +81,17 @@
     [self showColorPicker];
 }
 
+- (void)pickLinkPreviewBackgroundColor {
+    _currentColorKey = @"linkPreviewBackgroundColor";
+    [self showColorPicker];
+}
+
+- (void)pickLinkPreviewTextColor {
+    _currentColorKey = @"linkPreviewTextColor";
+    [self showColorPicker];
+}
+
+
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,
 converts it from hex string to UIColor. If no saved color, falls back to indicated default. Presents the picker

@@ -119,6 +119,8 @@ inherits attributes from UILabel*/
 @end
 
 @interface CNActionView : UIView
+- (void)matchIconToLabelAlpha;
+- (void)updateIconOpacity;
 @end
 
 @interface CKTranscriptDetailsResizableCell : UICollectionViewCell
@@ -570,6 +572,8 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
+
+/*
 static void logToFile(NSString *message) {
     FILE *logFile = fopen("/var/jb/var/mobile/whatamess_debug.log", "a");
     if (logFile) {
@@ -577,20 +581,17 @@ static void logToFile(NSString *message) {
         fclose(logFile);
     }
 }
+*/
 
 static UIColor *getSMSSentBubbleColor() {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentSMSBubbleColor"];
     
-    logToFile([NSString stringWithFormat:@"getSMSSentBubbleColor - hex: %@", hexColor]);
-    
     if (!hexColor) {
-        logToFile(@"No sent color set, returning default blue");
         return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
     }
     
     UIColor *color = colorFromHex(hexColor);
-    logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
     return color;
 }
 
@@ -598,15 +599,11 @@ static UIColor *getSentBubbleColor() {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"sentBubbleColor"];
     
-    logToFile([NSString stringWithFormat:@"getSentBubbleColor - hex: %@", hexColor]);
-    
     if (!hexColor) {
-        logToFile(@"No sent color set, returning default blue");
         return [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
     }
     
     UIColor *color = colorFromHex(hexColor);
-    logToFile([NSString stringWithFormat:@"Returning sent color: %@", color]);
     return color;
 }
 
@@ -614,15 +611,11 @@ static UIColor *getReceivedBubbleColor() {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
     NSString *hexColor = prefs[@"receivedBubbleColor"];
     
-    logToFile([NSString stringWithFormat:@"getReceivedBubbleColor - hex: %@", hexColor]);
-    
     if (!hexColor) {
-        logToFile(@"No received color set, returning default gray");
         return [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
     }
     
     UIColor *color = colorFromHex(hexColor);
-    logToFile([NSString stringWithFormat:@"Returning received color: %@", color]);
     return color;
 } 
 
@@ -759,6 +752,18 @@ static UIColor *getLinkPreviewTextColor() {
         // If this is an imageView with a chevron, exclude it
         if ([self isKindOfClass:[UIImageView class]]) {
             UIImageView *imageView = (UIImageView *)self;
+            
+            // Exclude swipe action icons FIRST
+            if (imageView.image) {
+                NSString *description = [imageView.image description];
+                if ([description containsString:@"trash.fill"] ||
+                    [description containsString:@"bell.slash.fill"] ||
+                    [description containsString:@"checkmark.message.fill"] ||
+                    [description containsString:@"message.badge.fill"]) {
+                    return %orig; // Let system handle swipe action colors
+                }
+            }
+            
             CGSize imageSize = imageView.image.size;
             
             // Chevrons are typically taller than wide and positioned on the right
@@ -1265,51 +1270,40 @@ sets tint color, if not, calls original method.*/
     int levels = 0;
     
     while (parent && levels < 10) {
-        // Check for unread indicator (only need to check first 5 levels)
         if (levels < 5 && [parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
             isUnreadIndicator = YES;
         }
         
-        // Check for DND indicator cell
         if ([parent isKindOfClass:%c(CKTranscriptUnavailabilityIndicatorCell)]) {
             isInIndicatorCell = YES;
-            break; // Found it, no need to continue
+            break;
         }
         
         parent = parent.superview;
         levels++;
     }
     
-    // Handle unread indicator
     if (isUnreadIndicator) {
-        // Only apply to small images (unread indicators are typically 8-12 points)
-        // Contact images are much larger (40+ points)
         CGSize imageSize = image.size;
         if (imageSize.width < 20 && imageSize.height < 20) {
             UIColor *customTint = getSystemTintColor();
             if (customTint) {
-                // Change rendering mode to template so it respects tint color
                 UIImage *tintedImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                 %orig(tintedImage);
                 self.tintColor = customTint;
             }
         }
-        return; // Exit early since we handled this case
+        return;
     }
     
-    // Handle DND moon icon
     if (isInIndicatorCell) {
         UIColor *customTint = getSystemTintColor();
         if (customTint) {
             UIColor *indicatorColor = [customTint colorWithAlphaComponent:0.75];
             
-            // Force template rendering
             UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
             self.image = templateImage;
             self.tintColor = indicatorColor;
-            
-            logToFile([NSString stringWithFormat:@"UIImageView hook: Applied color to DND moon icon - size: %.1f x %.1f", 
-                      self.frame.size.width, self.frame.size.height]);
         }
     }
 }
@@ -1962,7 +1956,6 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UILabel class]]) {
             UILabel *label = (UILabel *)subview;
             label.textColor = timestampColor;
-            logToFile([NSString stringWithFormat:@"Set timestamp color to label: %@", label.text]);
         }
     }
 }
@@ -2623,7 +2616,6 @@ same things too, like the blur. */
                                 // Add the NEW imageView directly to CKEntryViewButton
                                 [self addSubview:newImageView];
                                 
-                                logToFile([NSString stringWithFormat:@"Created new colored imageView: %.2f x %.2f", frameSize.width, frameSize.height]);
                             }
                         }
                     }
@@ -2858,9 +2850,9 @@ same things too, like the blur. */
         return;
     }
     
-    // Remove any existing blur views
+    // Remove any existing blur views WE added
     for (UIView *subview in [self.subviews copy]) {
-        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
             [subview removeFromSuperview];
         }
     }
@@ -2872,6 +2864,8 @@ same things too, like the blur. */
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     blurView.layer.cornerRadius = self.layer.cornerRadius;
     blurView.clipsToBounds = YES;
+    blurView.userInteractionEnabled = NO;
+    blurView.tag = 12345;
     
     [self insertSubview:blurView atIndex:0];
     self.backgroundColor = [UIColor clearColor];
@@ -2884,12 +2878,48 @@ same things too, like the blur. */
         return;
     }
     
-    // Update blur view frame if it exists
+    // Update blur view frame
     for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
             break;
+        }
+    }
+    
+    [self updateIconOpacity];
+}
+
+%new
+- (void)updateIconOpacity {
+    // Check if disabled
+    BOOL isDisabled = NO;
+    @try {
+        id disabled = [self valueForKey:@"disabled"];
+        if (disabled) {
+            isDisabled = [disabled boolValue];
+        }
+    } @catch (NSException *e) {
+        isDisabled = !self.userInteractionEnabled;
+    }
+    
+    // Find and update icon
+    for (UIView *stack in self.subviews) {
+        if ([NSStringFromClass([stack class]) isEqualToString:@"NUIContainerStackView"]) {
+            for (UIView *box in stack.subviews) {
+                if ([NSStringFromClass([box class]) isEqualToString:@"NUIContainerBoxView"]) {
+                    for (UIView *innerStack in box.subviews) {
+                        if ([NSStringFromClass([innerStack class]) isEqualToString:@"NUIContainerStackView"]) {
+                            for (UIView *icon in innerStack.subviews) {
+                                if ([icon isKindOfClass:[UIImageView class]]) {
+                                    icon.alpha = isDisabled ? 0.3 : 1.0;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -3665,15 +3695,12 @@ same things too, like the blur. */
             img = [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
             [view setValue:img forKey:@"_image"];
         }
-        
-        logToFile([NSString stringWithFormat:@"Applied glyph tint: %@", glyphTint]);
     }
     
     // Also try CKThumbsUpAcknowledgmentGlyphView and similar
     NSString *className = NSStringFromClass([view class]);
     if ([className containsString:@"AcknowledgmentGlyphView"]) {
         view.tintColor = glyphTint;
-        logToFile([NSString stringWithFormat:@"Applied tint to %@", className]);
     }
     
     // Recurse through all subviews
@@ -3898,7 +3925,6 @@ same things too, like the blur. */
     UIGraphicsEndImageContext();
     
     %orig(tintedImage);
-    logToFile([NSString stringWithFormat:@"Applied Core Graphics tint to glyph image"]);
 }
 
 - (void)didMoveToSuperview {
@@ -3945,8 +3971,6 @@ same things too, like the blur. */
     for (UIView *subview in self.subviews) {
         subview.tintColor = glyphTint;
     }
-    
-    logToFile(@"CKThumbsUpAcknowledgmentGlyphView - applied tint");
 }
 
 %end
@@ -4016,7 +4040,6 @@ same things too, like the blur. */
                         UIImage *tintedImage = [templateImage imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
                         attachment.image = tintedImage;
                         
-                        logToFile(@"Found and colored NSTextAttachment moon icon");
                     }
                 }
             }];
@@ -4027,10 +4050,6 @@ same things too, like the blur. */
                                range:NSMakeRange(0, attrString.length)];
             
             label.attributedText = attrString;
-            
-            logToFile([NSString stringWithFormat:@"Applied color to unavailability indicator with attributed text: %@", label.text]);
-        } else {
-            logToFile([NSString stringWithFormat:@"Applied color to unavailability indicator label: %@", label.text]);
         }
     }
     
@@ -4138,8 +4157,6 @@ same things too, like the blur. */
                     [(UILabel *)btnSubview setTextColor:customTint];
                 }
             }
-            
-            logToFile(@"Applied custom tint to Notify Anyway button");
             break;
         }
     }
@@ -4173,8 +4190,6 @@ same things too, like the blur. */
                     [(UILabel *)btnSubview setTextColor:customTint];
                 }
             }
-            
-            logToFile(@"Applied custom tint to Notify Anyway button in didMoveToWindow");
             break;
         }
     }
@@ -4194,7 +4209,136 @@ same things too, like the blur. */
     });
 }
 
+- (void)willMoveToWindow:(UIWindow *)newWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !newWindow) {
+        return;
+    }
+    
+    // Schedule a layout update for when the cell appears
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    });
+}
+
+- (void)prepareForReuse {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Force relayout when cell is reused
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self setNeedsLayout];
+        [self layoutIfNeeded];
+    });
+}
+
 %end
+
+%hook UISearchTextField
+
+- (void)didMoveToWindow {
+    %orig;
+
+    if (!isTweakEnabled()) {
+        return;
+    }
+
+    if (!self.window) return;
+
+    UIColor *accent = getSystemTintColor();
+    if (!accent) return;
+
+    // Desaturate and reduce opacity
+    CGFloat h, s, b, a;
+    if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        s *= 0.6; // Reduce saturation to 60%
+        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6]; // 60% opacity
+    }
+
+    // Set placeholder color using attributed string
+    if (self.placeholder) {
+        NSDictionary *attributes = @{NSForegroundColorAttributeName: accent};
+        self.attributedPlaceholder = [[NSAttributedString alloc] initWithString:self.placeholder attributes:attributes];
+    }
+    
+    // Color the search icon (magnifying glass)
+    UIImageView *leftView = (UIImageView *)self.leftView;
+    if (leftView && [leftView isKindOfClass:[UIImageView class]]) {
+        leftView.tintColor = accent;
+        leftView.alpha = 0.6;
+    }
+    
+    // Color any other icons (like microphone on the right)
+    if (self.rightView) {
+        self.rightView.tintColor = accent;
+        self.rightView.alpha = 0.6;
+        
+        // Also check for nested image views
+        for (UIView *subview in self.rightView.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                subview.tintColor = accent;
+                subview.alpha = 0.6;
+            }
+        }
+    }
+    
+    // Apply tint to all imageViews in the text field
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            subview.tintColor = accent;
+            subview.alpha = 0.6;
+        }
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *accent = getSystemTintColor();
+    if (!accent) return;
+    
+    // Desaturate and reduce opacity
+    CGFloat h, s, b, a;
+    if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        s *= 0.6; // Reduce saturation to 60%
+        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6]; // 60% opacity
+    }
+    
+    // Reapply placeholder color
+    if (self.placeholder && self.attributedPlaceholder) {
+        NSDictionary *attributes = @{NSForegroundColorAttributeName: accent};
+        self.attributedPlaceholder = [[NSAttributedString alloc] initWithString:self.placeholder attributes:attributes];
+    }
+    
+    if (self.leftView) {
+        self.leftView.tintColor = accent;
+        self.leftView.alpha = 0.6;
+    }
+    
+    if (self.rightView) {
+        self.rightView.tintColor = accent;
+        self.rightView.alpha = 0.6;
+    }
+    
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIImageView class]]) {
+            subview.tintColor = accent;
+            subview.alpha = 0.6;
+        }
+    }
+}
+
+%end
+
 
 /* iOS 17 Specific Hooks */
 
@@ -4227,9 +4371,6 @@ same things too, like the blur. */
         
         UIColor *adjustedColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
         self.backgroundColor = adjustedColor;
-        
-        logToFile([NSString stringWithFormat:@"Applied adjusted accent color to CKSendMenuPresentationPopoverBackdropView: %@ (dark mode: %d)", 
-                  adjustedColor, isDarkMode()]);
     }
 }
 
@@ -4544,8 +4685,6 @@ same things too, like the blur. */
                                                    arrowSize.height);
                     
                     [button addSubview:arrowOverlay];
-                    
-                    logToFile(@"iOS 17: Applied custom color to send button");
                 }
                 
                 break; // Found and processed the send button, exit loop

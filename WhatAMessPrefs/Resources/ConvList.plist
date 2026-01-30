@@ -136,6 +136,30 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>Pinned Conversation Preview Bubbles</string>
+			<key>footerText</key>
+			<string>Changes the bubble and text color of pinned conversations' preview/unread bubbles. If left unchanged, the bubble defaults to the chosen recieved bubble color and text color in the chat view.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Bubble Color</string>
+			<key>action</key>
+			<string>pickPinnedBubbleColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Bubble Text Color</string>
+			<key>action</key>
+			<string>pickPinnedBubbleTextColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>NavBar Title</string>
 			<key>footerText</key>
 			<string>Controls the "Messages" title in the Navigation Bar. Leave title field blank for the default title.</string>

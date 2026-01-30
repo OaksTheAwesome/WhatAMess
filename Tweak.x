@@ -113,6 +113,7 @@ inherits attributes from UILabel*/
 @end
 
 @interface CNGroupIdentityHeaderContainerView : UIView
+- (void)applyContactNameColor;
 @end
 
 @interface CKGroupPhotoCell : UIView
@@ -210,6 +211,36 @@ inherits attributes from UILabel*/
 
 @interface LPImageView : UIView
 @end
+
+@interface CKDetailsSearchResultsTitleHeaderCell : UIView
+@end
+
+@interface CKSearchResultsTitleHeaderCell : UIView
+@end
+
+@interface CKAvatarTitleCollectionReusableView : UIView
+@end
+
+@interface CKMessageAcknowledgmentPickerBarView: UIView
+@end
+
+@interface CKPinnedConversationSummaryBubble : UIView
+@end
+
+@interface CNContactView : UIView
+@end
+
+@interface UITableViewWrapperView : UIView
+@end
+
+@interface CNContactHeaderDisplayView : UIView
+@end
+
+@interface CNContactActionsContainerView : UIView
+@end
+
+
+
 
 
 /* ===================
@@ -572,7 +603,6 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
-
 /*
 static void logToFile(NSString *message) {
     FILE *logFile = fopen("/var/jb/var/mobile/whatamess_debug.log", "a");
@@ -582,6 +612,7 @@ static void logToFile(NSString *message) {
     }
 }
 */
+
 
 static UIColor *getSMSSentBubbleColor() {
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
@@ -734,6 +765,29 @@ static UIColor *getLinkPreviewTextColor() {
     return colorFromHex(hexColor);
 }
 
+static UIColor *getPinnedBubbleColor() {
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"pinnedBubbleColor"];
+    
+    if (!hexColor || [hexColor length] == 0) {
+        return getReceivedBubbleColor();
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getPinnedBubbleTextColor() {
+	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"pinnedBubbleTextColor"];
+    
+    if (!hexColor || [hexColor length] == 0) {
+        return getReceivedTextColor();
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+
 
 /* ===========
     HOOKS 
@@ -816,11 +870,21 @@ static UIColor *getLinkPreviewTextColor() {
     return %orig;
 }
 
-- (void)didMoveToSuperview {
+- (void)didMoveToWindow {
     %orig;
     
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
         return;
+    }
+    
+    // Check if this is the background view inside the reaction picker
+    if ([self class] == [UIView class] && 
+        [self.superview isKindOfClass:%c(CKMessageAcknowledgmentPickerBarView)]) {
+        UIColor *customColor = getReceivedBubbleColor();
+        if (customColor) {
+            self.backgroundColor = customColor;
+            return;
+        }
     }
     
     // Only apply to plain UIView (not subclasses like UIImageView or UIButton)
@@ -836,6 +900,16 @@ static UIColor *getLinkPreviewTextColor() {
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
         %orig;
         return;
+    }
+    
+    // Check if this is the background view inside the reaction picker
+    if ([self class] == [UIView class] && 
+        [self.superview isKindOfClass:%c(CKMessageAcknowledgmentPickerBarView)]) {
+        UIColor *customColor = getReceivedBubbleColor();
+        if (customColor) {
+            %orig(customColor);
+            return;
+        }
     }
     
     // Only apply to plain UIView (not subclasses like UIImageView or UIButton)
@@ -1353,7 +1427,7 @@ top to bottom. */
     if (ourBlur) {
         // We have our blur, update its frame
         CGRect blurFrame = self.bounds;
-        blurFrame.size.height += 55;
+        blurFrame.size.height += 70;
         ourBlur.frame = blurFrame;
         
         // Update mask - CRITICAL: disable implicit animations
@@ -1441,11 +1515,15 @@ top to bottom. */
 
 %new
 - (void)createOurBlur {
+
+    self.backgroundColor = [UIColor clearColor];
+    self.opaque = NO;
+
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
 
     CGRect blurFrame = self.bounds;
-    blurFrame.size.height += 55;
+    blurFrame.size.height += 70;
     blurView.frame = blurFrame;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self insertSubview:blurView atIndex:0];
@@ -1457,13 +1535,13 @@ top to bottom. */
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
     maskLayer.frame = blurView.bounds;
     maskLayer.colors = @[
-        (id)[UIColor colorWithWhite:1 alpha:1.0].CGColor,
-        (id)[UIColor colorWithWhite:1 alpha:0.9].CGColor,
-        (id)[UIColor colorWithWhite:1 alpha:0.55].CGColor,
-        (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor,
-        (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor
+        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor
     ];
-    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
+    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
     
     // CRITICAL: Prevent any implicit animations on the mask
     maskLayer.actions = @{
@@ -1488,14 +1566,23 @@ across messages app. Replaces the title with a custom user string and sets a cus
 
     if (!isTweakEnabled()) return;
 
+    // Get the custom conversation list title
+    NSString *conversationListTitle = getConversationListTitle();
+    
     // Check direct subviews
     for (UIView *sub in self.subviews) {
         // Check if it's a UILabel directly
         if ([sub isKindOfClass:[UILabel class]]) {
             UILabel *label = (UILabel *)sub;
-            if ([label.text isEqualToString:@"Messages"]) {
-                label.text = getConversationListTitle();
+            
+            // Handle conversation list title specifically (either "Messages" or custom title)
+            if ([label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle]) {
+                label.text = conversationListTitle;
                 label.textColor = getConversationListTitleColor();
+            }
+            // Apply contact title color to everything else
+            else if (isCustomTextColorsEnabled()) {
+                label.textColor = getTitleTextColor();
             }
         }
         
@@ -1504,9 +1591,15 @@ across messages app. Replaces the title with a custom user string and sets a cus
             for (UIView *subview in sub.subviews) {
                 if ([subview isKindOfClass:[UILabel class]]) {
                     UILabel *label = (UILabel *)subview;
-                    if ([label.text isEqualToString:@"Messages"]) {
-                        label.text = getConversationListTitle();
+                    
+                    // Handle conversation list title specifically (either "Messages" or custom title)
+                    if ([label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle]) {
+                        label.text = conversationListTitle;
                         label.textColor = getConversationListTitleColor();
+                    }
+                    // Apply contact title color to everything else
+                    else if (isCustomTextColorsEnabled()) {
+                        label.textColor = getTitleTextColor();
                     }
                 }
             }
@@ -2022,6 +2115,9 @@ same things too, like the blur. */
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
             isInMessageInput = YES;
         }
+		if ([parent isKindOfClass:%c(CKSearchResultsTitleHeaderCell)]) {
+			self.hidden = YES;
+		}
         parent = parent.superview;
         levels++;
     }
@@ -2049,25 +2145,25 @@ same things too, like the blur. */
 
     // Expand the effect view frame upward by 55 points
     CGRect expandedFrame = effectView.frame;
-    expandedFrame.origin.y -= 55;
-    expandedFrame.size.height += 55;
+    expandedFrame.origin.y -= 70;
+    expandedFrame.size.height += 70;
     effectView.frame = expandedFrame;
 
     [CATransaction commit];
 
-    self.alpha = 1.0;
+    self.alpha = 1.0; //Doesn't mess with the navbar just the message bar lol
     
     // Apply gradient mask
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
     maskLayer.frame = self.bounds;
     maskLayer.colors = @[
         (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+        (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
         (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
         (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
         (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor
     ];
-    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.98, @1.0];
+    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
     self.layer.mask = maskLayer;
 }
 
@@ -2246,6 +2342,9 @@ same things too, like the blur. */
         if ([className isEqualToString:@"CKMessageEntryView"]) {
             isInMessageInput = YES;
         }
+		if ([className isEqualToString:@"_UIBarBackground"]) {
+			self.alpha = 0.0;
+		}
         parent = parent.superview;
         levels++;
     }
@@ -2283,6 +2382,9 @@ same things too, like the blur. */
         if ([className isEqualToString:@"CKMessageEntryView"]) {
             isInMessageInput = YES;
         }
+		if ([className isEqualToString:@"_UIBarBackground"]) {
+			self.alpha = 0.0;
+		}
         parent = parent.superview;
         levels++;
     }
@@ -2804,6 +2906,39 @@ same things too, like the blur. */
     }
     
     self.backgroundColor = [UIColor clearColor];
+
+	if (isCustomTextColorsEnabled()) {
+        [self applyContactNameColor];
+    }
+}
+
+%new
+- (void)applyContactNameColor {
+
+	    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Navigate through the stack view hierarchy to find the label
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIStackView class]]) {
+            UIStackView *outerStack = (UIStackView *)subview;
+            
+            for (UIView *innerView in outerStack.arrangedSubviews) {
+                if ([innerView isKindOfClass:[UIStackView class]]) {
+                    UIStackView *innerStack = (UIStackView *)innerView;
+                    
+                    for (UIView *stackItem in innerStack.arrangedSubviews) {
+                        if ([stackItem isKindOfClass:[UILabel class]]) {
+                            UILabel *label = (UILabel *)stackItem;
+                            label.textColor = titleColor;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
@@ -2813,6 +2948,7 @@ same things too, like the blur. */
     }
     
     %orig([UIColor clearColor]);
+
 }
 
 %end
@@ -3674,11 +3810,11 @@ same things too, like the blur. */
 - (void)applyGlyphTintRecursively:(UIView *)view {
     // Get lightened, desaturated system tint for glyphs
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0]; // fallback
-    UIColor *systemTint = getSystemTintColor();
+    UIColor *customGlyphTint = getSystemTintColor();
     
-    if (systemTint) {
+    if (customGlyphTint) {
         CGFloat h, s, b, a;
-        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
             s *= 0.2;              // desaturate to 30%
             b = MIN(1.0, b + 0.2); // lighten by 40%
             glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
@@ -3893,11 +4029,11 @@ same things too, like the blur. */
     
     // Get lightened, desaturated system tint
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *systemTint = getSystemTintColor();
+    UIColor *customGlyphTint = getSystemTintColor();
     
-    if (systemTint) {
+    if (customGlyphTint) {
         CGFloat h, s, b, a;
-        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
             s *= 0.3;
             b = MIN(1.0, b + 0.4);
             glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
@@ -3954,11 +4090,11 @@ same things too, like the blur. */
     
     // Get lightened, desaturated system tint
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *systemTint = getSystemTintColor();
+    UIColor *customGlyphTint = getSystemTintColor();
     
-    if (systemTint) {
+    if (customGlyphTint) {
         CGFloat h, s, b, a;
-        if ([systemTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
             s *= 0.3;
             b = MIN(1.0, b + 0.4);
             glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
@@ -4339,6 +4475,444 @@ same things too, like the blur. */
 
 %end
 
+%hook CKDetailsSearchResultsTitleHeaderCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color UILabels in this cell
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color UILabels in this cell
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+%end
+
+%hook CKSearchResultsTitleHeaderCell
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color UILabels in this cell
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color UILabels in this cell
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+%end
+
+%hook CKAvatarTitleCollectionReusableView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color CKLabels in this view
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:%c(CKLabel)]) {
+            CKLabel *label = (CKLabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color CKLabels in this view
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:%c(CKLabel)]) {
+            CKLabel *label = (CKLabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
+%end
+
+%hook CKMessageAcknowledgmentPickerBarView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *customColor = getReceivedBubbleColor();
+    if (!customColor) {
+        return;
+    }
+    
+    // Color all sublayers (including the tail)
+    for (CALayer *sublayer in self.layer.sublayers) {
+        sublayer.backgroundColor = customColor.CGColor;
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customColor = getReceivedBubbleColor();
+    if (!customColor) {
+        return;
+    }
+    
+    // Color all sublayers (including the tail)
+    for (CALayer *sublayer in self.layer.sublayers) {
+        sublayer.backgroundColor = customColor.CGColor;
+    }
+}
+
+%end
+
+%hook CKPinnedConversationSummaryBubble
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *bubbleColor = getPinnedBubbleColor();
+    UIColor *textColor = getPinnedBubbleTextColor();
+    
+    if (!bubbleColor && !textColor) {
+        return;
+    }
+    
+    // Color the backdrop layer (bubble background) and reduce shadow
+    for (CALayer *sublayer in self.layer.sublayers) {
+        if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
+            if (bubbleColor) {
+                sublayer.backgroundColor = bubbleColor.CGColor;
+            }
+        } else if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewShadowLayer)]) {
+            // Reduce shadow opacity (default is usually 1.0, try 0.3 or 0.2)
+            sublayer.opacity = 0.3;
+        }
+    }
+    
+    // Color the text label
+    if (textColor) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)subview;
+                label.textColor = textColor;
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *bubbleColor = getPinnedBubbleColor();
+    UIColor *textColor = getPinnedBubbleTextColor();
+    
+    if (!bubbleColor && !textColor) {
+        return;
+    }
+    
+    // Color the backdrop layer (bubble background) and reduce shadow
+    for (CALayer *sublayer in self.layer.sublayers) {
+        if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
+            if (bubbleColor) {
+                sublayer.backgroundColor = bubbleColor.CGColor;
+            }
+        } else if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewShadowLayer)]) {
+            // Reduce shadow opacity
+            sublayer.opacity = 0.3;
+        }
+    }
+    
+    // Color the text label
+    if (textColor) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)subview;
+                label.textColor = textColor;
+            }
+        }
+    }
+}
+
+%end
+
+%hook CNContactView
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.superview) {
+        return;
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+    
+    BOOL hasChatImage = [[NSFileManager defaultManager] fileExistsAtPath:kChatImagePath];
+    UIImage *chatBgImage = hasChatImage ? [UIImage imageWithContentsOfFile:kChatImagePath] : nil;
+    
+    if (isChatColorBgEnabled()) {
+        self.backgroundColor = getChatBackgroundColor();
+    }
+    else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) {
+            chatBgImage = blurImage(chatBgImage, blurAmount);
+        }
+        
+        // Remove any existing background images from superview
+        for (UIView *subview in [self.superview.subviews copy]) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                UIImageView *imgView = (UIImageView *)subview;
+                if (imgView.contentMode == UIViewContentModeScaleAspectFill) {
+                    [imgView removeFromSuperview];
+                }
+            }
+        }
+        
+        // Insert image at index 0 of superview
+        UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.frame];
+        imageView.image = chatBgImage;
+        imageView.contentMode = UIViewContentModeScaleAspectFill;
+        imageView.clipsToBounds = YES;
+        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        imageView.userInteractionEnabled = NO;
+        [self.superview insertSubview:imageView atIndex:0];
+        
+        // Make CNContactView transparent
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    if (isChatColorBgEnabled()) {
+        %orig(getChatBackgroundColor());
+    } else if (isChatImageBgEnabled()) {
+        %orig([UIColor clearColor]);
+    } else {
+        %orig([UIColor clearColor]);
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Update background image in superview if it exists
+    if (self.superview && isChatImageBgEnabled()) {
+        for (UIView *subview in self.superview.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) {
+                UIImageView *imgView = (UIImageView *)subview;
+                if (imgView.contentMode == UIViewContentModeScaleAspectFill) {
+                    imgView.frame = self.frame;
+                    [self.superview sendSubviewToBack:imgView];
+                    break;
+                }
+            }
+        }
+        
+        self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+%end
+
+%hook UITableViewWrapperView
+
+- (void)didMoveToSuperview {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIView *parent = self.superview;
+    int levels = 0;
+    
+    while (parent && levels < 5) {
+        if ([parent isKindOfClass:NSClassFromString(@"CNContactView")]) {
+            self.backgroundColor = [UIColor clearColor];
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+}
+
+%end
+
+%hook CNContactHeaderDisplayView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    %orig([UIColor clearColor]);
+}
+
+%end
+
+%hook CNContactActionsContainerView
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    self.backgroundColor = [UIColor clearColor];
+    
+    // Find and hide the separator
+    for (UIView *subview in self.subviews) {
+        // Check for separator views (usually UIView with small height)
+        if ([subview class] == [UIView class] && subview.frame.size.height < 2) {
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+        }
+    }
+}
+
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (!isTweakEnabled()) {
+        %orig;
+        return;
+    }
+    
+    %orig([UIColor clearColor]);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Re-hide separator after layout
+    for (UIView *subview in self.subviews) {
+        if ([subview class] == [UIView class] && subview.frame.size.height < 2) {
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+        }
+    }
+}
+
+%end
 
 /* iOS 17 Specific Hooks */
 

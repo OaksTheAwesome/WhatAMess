@@ -23,6 +23,7 @@ inherits attributes from UILabel*/
 - (void)createOurBlur;
 - (void)removeSystemViews;
 - (void)ensureBlurExists;
+- (BOOL)findContactViewInWindow:(UIView *)view;
 @end
 
 @interface _UICollectionViewListSeparatorView : UIView
@@ -788,7 +789,6 @@ static UIColor *getPinnedBubbleTextColor() {
 }
 
 
-
 /* ===========
     HOOKS 
 ============*/
@@ -1408,15 +1408,20 @@ top to bottom. */
         return;
     }
 
+    // Check if CNContactView is visible in our window
+    BOOL hasContactView = NO;
+    if (self.window) {
+        hasContactView = [self findContactViewInWindow:self.window];
+    }
+    
     // Always clean up system views first
     [self removeSystemViews];
     
-    // Check if we have a valid blur with mask
+    // Find our blur view
     UIVisualEffectView *ourBlur = nil;
     for (UIView *sub in self.subviews) {
         if ([sub isKindOfClass:[UIVisualEffectView class]]) {
             UIVisualEffectView *blurView = (UIVisualEffectView *)sub;
-            // Check if it has our gradient mask
             if ([blurView.layer.mask isKindOfClass:[CAGradientLayer class]]) {
                 ourBlur = blurView;
                 break;
@@ -1428,9 +1433,18 @@ top to bottom. */
         // We have our blur, update its frame
         CGRect blurFrame = self.bounds;
         blurFrame.size.height += 70;
+        
+        if (hasContactView) {
+            // Move off-screen if contact view exists
+            blurFrame.origin.y = 1000;
+        } else {
+            // Normal position
+            blurFrame.origin.y = 0;
+        }
+        
         ourBlur.frame = blurFrame;
         
-        // Update mask - CRITICAL: disable implicit animations
+        // ALWAYS update mask - CRITICAL: disable implicit animations
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         
@@ -1470,6 +1484,19 @@ top to bottom. */
     }
     
     %orig;
+}
+
+%new
+- (BOOL)findContactViewInWindow:(UIView *)view {
+    if ([view isKindOfClass:NSClassFromString(@"CNContactView")]) {
+        return YES;
+    }
+    for (UIView *subview in view.subviews) {
+        if ([self findContactViewInWindow:subview]) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 %new
@@ -1515,7 +1542,6 @@ top to bottom. */
 
 %new
 - (void)createOurBlur {
-
     self.backgroundColor = [UIColor clearColor];
     self.opaque = NO;
 
@@ -2115,11 +2141,33 @@ same things too, like the blur. */
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
             isInMessageInput = YES;
         }
-		if ([parent isKindOfClass:%c(CKSearchResultsTitleHeaderCell)]) {
-			self.hidden = YES;
-		}
+        if ([parent isKindOfClass:%c(CKSearchResultsTitleHeaderCell)]) {
+            self.hidden = YES;
+        }
         parent = parent.superview;
         levels++;
+    }
+    
+    // Check if we're in CNActionView inside CNContactView
+    parent = self.superview;
+    BOOL isInActionView = NO;
+    BOOL isInContactView = NO;
+    levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:NSClassFromString(@"CNActionView")]) {
+            isInActionView = YES;
+        }
+        if ([parent isKindOfClass:NSClassFromString(@"CNContactView")]) {
+            isInContactView = YES;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (isInActionView && isInContactView) {
+        self.hidden = YES;
+        return;
     }
     
     if (!isInMessageInput || isInKeyboard || !effectView) {
@@ -2151,7 +2199,7 @@ same things too, like the blur. */
 
     [CATransaction commit];
 
-    self.alpha = 1.0; //Doesn't mess with the navbar just the message bar lol
+    self.alpha = 1.0;
     
     // Apply gradient mask
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
@@ -4845,6 +4893,27 @@ same things too, like the blur. */
 
 %hook CNContactHeaderDisplayView
 
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) {
+        return;
+    }
+    
+    // Find and color the UILabel with the contact name
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)subview;
+            label.textColor = titleColor;
+        }
+    }
+}
+
 - (void)didMoveToWindow {
     %orig;
     
@@ -4853,15 +4922,18 @@ same things too, like the blur. */
     }
     
     self.backgroundColor = [UIColor clearColor];
-}
-
-- (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (!isTweakEnabled()) {
-        %orig;
-        return;
-    }
     
-    %orig([UIColor clearColor]);
+    if (isCustomTextColorsEnabled()) {
+        UIColor *titleColor = getTitleTextColor();
+        if (titleColor) {
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    label.textColor = titleColor;
+                }
+            }
+        }
+    }
 }
 
 %end
@@ -4913,6 +4985,93 @@ same things too, like the blur. */
 }
 
 %end
+
+%hook UITableViewCell
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're inside CNContactView
+    UIView *parent = self.superview;
+    BOOL isInContactView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:NSClassFromString(@"CNContactView")]) {
+            isInContactView = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isInContactView) {
+        return;
+    }
+    
+    // Remove any existing blur views
+    for (UIView *subview in [self.subviews copy]) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            [subview removeFromSuperview];
+        }
+    }
+    
+    // Create and add blur effect to self (not contentView)
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
+    blurView.frame = self.bounds;
+    blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blurView.layer.cornerRadius = self.layer.cornerRadius;
+    blurView.clipsToBounds = YES;
+    
+    [self insertSubview:blurView atIndex:0];
+    self.backgroundColor = [UIColor clearColor];
+    self.contentView.backgroundColor = [UIColor clearColor];
+    self.clipsToBounds = YES;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Check if we're inside CNContactView
+    UIView *parent = self.superview;
+    BOOL isInContactView = NO;
+    int levels = 0;
+    
+    while (parent && levels < 10) {
+        if ([parent isKindOfClass:NSClassFromString(@"CNContactView")]) {
+            isInContactView = YES;
+            break;
+        }
+        parent = parent.superview;
+        levels++;
+    }
+    
+    if (!isInContactView) {
+        return;
+    }
+    
+    // Update blur view frame
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            subview.frame = self.bounds;
+            subview.layer.cornerRadius = self.layer.cornerRadius;
+            break;
+        }
+    }
+}
+
+%end
+
+
 
 /* iOS 17 Specific Hooks */
 

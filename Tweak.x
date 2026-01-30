@@ -240,7 +240,8 @@ inherits attributes from UILabel*/
 @interface CNContactActionsContainerView : UIView
 @end
 
-
+@interface CKMessageAcknowledgmentPickerBarItemViewPhone : UIView
+@end
 
 
 
@@ -604,7 +605,7 @@ void applyCustomTextColors(UIView *view) {
 	}
 }
 
-/*
+
 static void logToFile(NSString *message) {
     FILE *logFile = fopen("/var/jb/var/mobile/whatamess_debug.log", "a");
     if (logFile) {
@@ -612,7 +613,7 @@ static void logToFile(NSString *message) {
         fclose(logFile);
     }
 }
-*/
+
 
 
 static UIColor *getSMSSentBubbleColor() {
@@ -5071,7 +5072,46 @@ same things too, like the blur. */
 
 %end
 
+%hook CKMessageAcknowledgmentPickerBarItemViewPhone
 
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *accentColor = getSystemTintColor();
+    if (!accentColor) {
+        return;
+    }
+    
+    UIView *selfView = (UIView *)self;
+    
+    // Check if there are 3 sublayers (means one is selected)
+    if (selfView.layer.sublayers.count == 3) {
+        CALayer *highlightLayer = selfView.layer.sublayers[0];
+        
+        // Verify this is the highlight layer (has cornerRadius and backgroundColor)
+        if (highlightLayer.cornerRadius > 0 && highlightLayer.backgroundColor) {
+            UIColor *currentColor = [UIColor colorWithCGColor:highlightLayer.backgroundColor];
+            CGFloat r, g, b, a;
+            
+            if ([currentColor getRed:&r green:&g blue:&b alpha:&a]) {
+                // Check if it's stock green (SMS) or blue (iMessage)
+                BOOL isStockGreen = (r > 0.15 && r < 0.25 && g > 0.75 && g < 0.9 && b > 0.3 && b < 0.4);
+                BOOL isStockBlue = (r < 0.1 && g > 0.4 && g < 0.6 && b > 0.9);
+                
+                if (isStockGreen || isStockBlue) {
+                    logToFile([NSString stringWithFormat:@"Replacing highlight color with accent color"]);
+                    highlightLayer.backgroundColor = accentColor.CGColor;
+                }
+            }
+        }
+    }
+}
+
+%end
 
 /* iOS 17 Specific Hooks */
 

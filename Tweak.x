@@ -243,7 +243,18 @@ inherits attributes from UILabel*/
 @interface CKMessageAcknowledgmentPickerBarItemViewPhone : UIView
 @end
 
+@interface CKCanvasBackButtonView : UIView
+@end
 
+@interface CKPinnedConversationTypingBubble : UIView
+@end
+
+@interface CKConversationListTypingIndicatorView : UIView
+@end
+
+@interface CKTypingView : UIView
+- (void)applyTypingIndicatorColors;
+@end
 
 /* ===================
   PREFERENCE THINGS 
@@ -388,6 +399,21 @@ BOOL isDarkMode() {
         return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
     }
     return NO;
+}
+
+BOOL isNavBarCustomizationEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isNavBarCustomizationEnabled"] ? [prefs[@"isNavBarCustomizationEnabled"] boolValue] : NO;
+}
+
+BOOL isMessageBarCustomizationEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isMessageBarCustomizationEnabled"] ? [prefs[@"isMessageBarCustomizationEnabled"] boolValue] : NO;
+}
+
+BOOL isCellBlurTintEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isCellBlurTintEnabled"] ? [prefs[@"isCellBlurTintEnabled"] boolValue] : NO;
 }
 
 /* Checks the amount of blur to apply to image based on user slider input. 
@@ -784,6 +810,39 @@ static UIColor *getPinnedBubbleTextColor() {
     
     if (!hexColor || [hexColor length] == 0) {
         return getReceivedTextColor();
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getNavBarTintColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"navBarTintColor"];
+    
+    if (!hexColor) {
+        return getSystemTintColor(); 
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getMessageBarTintColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"messageBarTintColor"];
+    
+    if (!hexColor) {
+        return getSystemTintColor(); 
+    }
+    
+    return colorFromHex(hexColor);
+}
+
+static UIColor *getCellBlurTintColor() {
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
+    NSString *hexColor = prefs[@"cellTintColor"];
+    
+    if (!hexColor) {
+        return getSystemTintColor(); // Fallback to system tint
     }
     
     return colorFromHex(hexColor);
@@ -1393,82 +1452,143 @@ top to bottom. */
 - (void)didMoveToWindow {
     %orig;
     
-    if (!isTweakEnabled() || !isModernNavBarEnabled()) {
+    if (!isTweakEnabled()) {
         return;
     }
     
-    if (self.window) {
-        [self ensureBlurExists];
+    if (isModernNavBarEnabled()) {
+        if (self.window) {
+            [self ensureBlurExists];
+        }
     }
 }
 
 - (void)layoutSubviews {
     %orig;
 
-    if (!isTweakEnabled() || !isModernNavBarEnabled()) {
+    if (!isTweakEnabled()) {
         return;
     }
 
-    // Check if CNContactView is visible in our window
+    // Modern navbar enabled - use custom blur
+    if (isModernNavBarEnabled()) {
+        BOOL hasContactView = NO;
+        if (self.window) {
+            hasContactView = [self findContactViewInWindow:self.window];
+        }
+        
+        [self removeSystemViews];
+        
+        UIVisualEffectView *ourBlur = nil;
+        for (UIView *sub in self.subviews) {
+            if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+                UIVisualEffectView *blurView = (UIVisualEffectView *)sub;
+                if ([blurView.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                    ourBlur = blurView;
+                    break;
+                }
+            }
+        }
+        
+        if (ourBlur) {
+            CGRect blurFrame = self.bounds;
+            blurFrame.size.height += 70;
+            
+            if (hasContactView) {
+                blurFrame.origin.y = 1000;
+            } else {
+                blurFrame.origin.y = 0;
+            }
+            
+            ourBlur.frame = blurFrame;
+            
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            
+            CAGradientLayer *maskLayer = (CAGradientLayer *)ourBlur.layer.mask;
+            maskLayer.frame = ourBlur.bounds;
+            
+            [CATransaction commit];
+        } else {
+            [self createOurBlur];
+        }
+        
+        self.backgroundColor = [UIColor clearColor];
+        return;
+    }
+    
+    // Modern navbar DISABLED - check if navbar customization is enabled
+    if (!isNavBarCustomizationEnabled()) {
+        return;
+    }
+    
+    UIColor *tintColor = getNavBarTintColor();
+    if (!tintColor) {
+        return;
+    }
+    
+    // Check if contact view is visible - if so, hide
     BOOL hasContactView = NO;
     if (self.window) {
         hasContactView = [self findContactViewInWindow:self.window];
     }
     
-    // Always clean up system views first
-    [self removeSystemViews];
-    
-    // Find our blur view
-    UIVisualEffectView *ourBlur = nil;
-    for (UIView *sub in self.subviews) {
-        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
-            UIVisualEffectView *blurView = (UIVisualEffectView *)sub;
-            if ([blurView.layer.mask isKindOfClass:[CAGradientLayer class]]) {
-                ourBlur = blurView;
-                break;
-            }
-        }
-    }
-    
-    if (ourBlur) {
-        // We have our blur, update its frame
-        CGRect blurFrame = self.bounds;
-        blurFrame.size.height += 70;
-        
-        if (hasContactView) {
-            // Move off-screen if contact view exists
-            blurFrame.origin.y = 1000;
-        } else {
-            // Normal position
-            blurFrame.origin.y = 0;
-        }
-        
-        ourBlur.frame = blurFrame;
-        
-        // ALWAYS update mask - CRITICAL: disable implicit animations
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        
-        CAGradientLayer *maskLayer = (CAGradientLayer *)ourBlur.layer.mask;
-        maskLayer.frame = ourBlur.bounds;
-        
-        [CATransaction commit];
+    if (hasContactView) {
+        self.alpha = 0.0;
+        return;
     } else {
-        // Blur is missing, create it
-        [self createOurBlur];
+        self.alpha = 1.0;
     }
     
-    self.backgroundColor = [UIColor clearColor];
+    // Find the system blur view and neutralize + tint it
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            
+            // Neutralize the adaptive color subviews
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Look for existing tint overlay (it will be a plain UIView)
+            UIView *tintOverlay = nil;
+            for (UIView *contentSubview in blurView.contentView.subviews) {
+                // Identify our tint overlay by checking if it's a plain UIView
+                if ([contentSubview class] == [UIView class] && contentSubview.backgroundColor) {
+                    CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+                    if ([contentSubview.backgroundColor getRed:&r1 green:&g1 blue:&b1 alpha:&a1] &&
+                        [tintColor getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
+                        // Check if colors match (with some tolerance)
+                        if (fabs(r1 - r2) < 0.01 && fabs(g1 - g2) < 0.01 && fabs(b1 - b2) < 0.01) {
+                            tintOverlay = contentSubview;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (!tintOverlay) {
+                tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+                tintOverlay.userInteractionEnabled = NO;
+                tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                [blurView.contentView addSubview:tintOverlay];
+            }
+            
+            // Apply tint with reduced opacity for subtle coloring
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            tintOverlay.frame = blurView.contentView.bounds;
+        }
+    }
 }
 
-// Block system from adding its own views
 - (void)addSubview:(UIView *)view {
     if (!isTweakEnabled() || !isModernNavBarEnabled()) {
         %orig;
         return;
     }
     
-    // Check if we already have our blur
     BOOL hasOurBlur = NO;
     for (UIView *sub in self.subviews) {
         if ([sub isKindOfClass:[UIVisualEffectView class]]) {
@@ -1479,11 +1599,21 @@ top to bottom. */
         }
     }
     
-    // If we have our blur and iOS is trying to add a system blur/image, block it
     if (hasOurBlur && ([view isKindOfClass:[UIVisualEffectView class]] || [view isKindOfClass:[UIImageView class]])) {
         return;
     }
     
+    %orig;
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    if (!isTweakEnabled() || isModernNavBarEnabled()) {
+        %orig;
+        return;
+    }
+    
+    // When modern navbar is disabled, respect the system's alpha changes
+    // (this handles the scroll-to-hide behavior)
     %orig;
 }
 
@@ -1580,6 +1710,66 @@ top to bottom. */
     blurView.layer.mask = maskLayer;
     
     [CATransaction commit];
+}
+
+%end
+
+%hook UINavigationBar
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Hide separator when navbar customization is enabled (and modern navbar is disabled)
+    if (!isModernNavBarEnabled() && isNavBarCustomizationEnabled()) {
+        // Find and hide only the specific separator view
+        for (UIView *subview in self.subviews) {
+            NSString *className = NSStringFromClass([subview class]);
+            
+            // Only target the specific separator classes, not all thin views
+            if ([className isEqualToString:@"_UIBarBackground"]) {
+                // Check the _UIBarBackground's subviews for the separator
+                for (UIView *bgSubview in subview.subviews) {
+                    NSString *bgClassName = NSStringFromClass([bgSubview class]);
+                    if ([bgClassName containsString:@"ShadowView"] || 
+                        [bgClassName isEqualToString:@"UIImageView"]) {
+                        // This is likely the separator shadow
+                        bgSubview.hidden = YES;
+                        bgSubview.alpha = 0.0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    // Hide separator when navbar customization is enabled
+    if (!isModernNavBarEnabled() && isNavBarCustomizationEnabled()) {
+        for (UIView *subview in self.subviews) {
+            NSString *className = NSStringFromClass([subview class]);
+            
+            if ([className isEqualToString:@"_UIBarBackground"]) {
+                for (UIView *bgSubview in subview.subviews) {
+                    NSString *bgClassName = NSStringFromClass([bgSubview class]);
+                    if ([bgClassName containsString:@"ShadowView"] || 
+                        [bgClassName isEqualToString:@"UIImageView"]) {
+                        bgSubview.hidden = YES;
+                        bgSubview.alpha = 0.0;
+                    }
+                }
+            }
+        }
+    }
 }
 
 %end
@@ -1772,7 +1962,7 @@ same things too, like the blur. */
 - (void)layoutSubviews {
     %orig;
 
-    if (!isTweakEnabled() || !isModernMessageBarEnabled()) return;
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
     if (self.frame.size.width <= 0 || self.frame.size.height <= 0) return;
 
     // Check if this gradient is inside a reaction bubble
@@ -1804,7 +1994,7 @@ same things too, like the blur. */
 }
 
 - (void)setColors:(NSArray *)colors {
-    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
         %orig;
         return;
     }
@@ -2118,7 +2308,7 @@ same things too, like the blur. */
 - (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled() || !isModernMessageBarEnabled()) {
+    if (!isTweakEnabled()) {
         return;
     }
     
@@ -2142,7 +2332,7 @@ same things too, like the blur. */
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) {
             isInMessageInput = YES;
         }
-        if ([parent isKindOfClass:%c(CKSearchResultsTitleHeaderCell)]) {
+        if ([parent isKindOfClass:%c(CKSearchResultsTitleHeaderCell)] && isModernNavBarEnabled()) {
             self.hidden = YES;
         }
         parent = parent.superview;
@@ -2175,45 +2365,99 @@ same things too, like the blur. */
         return;
     }
 
-    // PREVENT BLACK FLASH
-    effectView.backgroundColor = [UIColor clearColor];
-    effectView.contentView.backgroundColor = [UIColor clearColor];
-    effectView.opaque = NO;
+    // Modern message bar is enabled - use gradient blur
+    if (isModernMessageBarEnabled()) {
+        // PREVENT BLACK FLASH
+        effectView.backgroundColor = [UIColor clearColor];
+        effectView.contentView.backgroundColor = [UIColor clearColor];
+        effectView.opaque = NO;
 
-    self.backgroundColor = [UIColor clearColor];
-    self.opaque = NO;
+        self.backgroundColor = [UIColor clearColor];
+        self.opaque = NO;
 
-    // FORCE EFFECT TO EXIST BEFORE FIRST DRAW
-    if (!effectView.effect) {
-        effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+        // FORCE EFFECT TO EXIST BEFORE FIRST DRAW
+        if (!effectView.effect) {
+            effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+        }
+
+        // DISABLE IMPLICIT ANIMATIONS (FRAME EXPANSION)
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+
+        // Expand the effect view frame upward by 70 points
+        CGRect expandedFrame = effectView.frame;
+        expandedFrame.origin.y -= 70;
+        expandedFrame.size.height += 70;
+        effectView.frame = expandedFrame;
+
+        [CATransaction commit];
+
+        self.alpha = 1.0;
+        
+        // Apply gradient mask
+        CAGradientLayer *maskLayer = [CAGradientLayer layer];
+        maskLayer.frame = self.bounds;
+        maskLayer.colors = @[
+            (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor
+        ];
+        maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
+        self.layer.mask = maskLayer;
+        return;
     }
-
-    // DISABLE IMPLICIT ANIMATIONS (FRAME EXPANSION)
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-
-    // Expand the effect view frame upward by 55 points
-    CGRect expandedFrame = effectView.frame;
-    expandedFrame.origin.y -= 70;
-    expandedFrame.size.height += 70;
-    effectView.frame = expandedFrame;
-
-    [CATransaction commit];
-
-    self.alpha = 1.0;
     
-    // Apply gradient mask
-    CAGradientLayer *maskLayer = [CAGradientLayer layer];
-    maskLayer.frame = self.bounds;
-    maskLayer.colors = @[
-        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor
-    ];
-    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
-    self.layer.mask = maskLayer;
+    // Modern message bar DISABLED - check if message bar customization is enabled
+    if (!isMessageBarCustomizationEnabled()) {
+        return;
+    }
+    
+    UIColor *tintColor = getMessageBarTintColor();
+    if (!tintColor) {
+        return;
+    }
+    
+    // Remove gradient mask if it exists
+    self.layer.mask = nil;
+    
+    // Neutralize the adaptive color subviews in the effect view
+    for (UIView *subview in effectView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Find or create tint overlay in the effect view's content view
+    if (effectView) {
+        UIView *tintOverlay = nil;
+        for (UIView *contentSubview in effectView.contentView.subviews) {
+            // Identify our tint overlay by checking if it's a plain UIView
+            if ([contentSubview class] == [UIView class] && contentSubview.backgroundColor) {
+                CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+                if ([contentSubview.backgroundColor getRed:&r1 green:&g1 blue:&b1 alpha:&a1] &&
+                    [tintColor getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
+                    // Check if colors match (with some tolerance)
+                    if (fabs(r1 - r2) < 0.01 && fabs(g1 - g2) < 0.01 && fabs(b1 - b2) < 0.01) {
+                        tintOverlay = contentSubview;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!tintOverlay) {
+            tintOverlay = [[UIView alloc] initWithFrame:effectView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [effectView.contentView addSubview:tintOverlay];
+        }
+        
+        // Apply tint with reduced opacity for subtle coloring
+        tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+        tintOverlay.frame = effectView.contentView.bounds;
+    }
 }
 
 - (void)willMoveToSuperview:(UIView *)newSuperview {
@@ -3042,8 +3286,8 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add thinner blur effect
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -3054,6 +3298,27 @@ same things too, like the blur. */
     
     [self insertSubview:blurView atIndex:0];
     self.backgroundColor = [UIColor clearColor];
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            // Clear the background color to remove dark/light tinting
+            // but DON'T set alpha to 0 - that removes the blur entirely
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
 
 - (void)layoutSubviews {
@@ -3068,6 +3333,28 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -3111,7 +3398,7 @@ same things too, like the blur. */
 
 %end
 
-/* Hook for CKTranscriptDetailsResizableCell - apply thinner blur */
+/* Hook for CKTranscriptDetailsResizableCell - apply neutral blur */
 %hook CKTranscriptDetailsResizableCell
 
 - (void)didMoveToWindow {
@@ -3128,8 +3415,8 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add thinner blur effect
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.contentView.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -3139,6 +3426,25 @@ same things too, like the blur. */
     [self.contentView insertSubview:blurView atIndex:0];
     self.contentView.backgroundColor = [UIColor clearColor];
     self.backgroundColor = [UIColor clearColor];
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
 
 - (void)layoutSubviews {
@@ -3153,6 +3459,28 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
             subview.frame = self.contentView.bounds;
             subview.layer.cornerRadius = self.contentView.layer.cornerRadius;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -3160,7 +3488,7 @@ same things too, like the blur. */
 
 %end
 
-/* Hook for CKDetailsSharedWithYouCell - apply thinner blur, fixed to cover entire cell */
+/* Hook for CKDetailsSharedWithYouCell - apply neutral blur */
 %hook CKDetailsSharedWithYouCell
 
 - (void)didMoveToWindow {
@@ -3182,8 +3510,8 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add thinner blur effect to self (not contentView) to cover entire cell
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect to self (not contentView) to cover entire cell
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -3193,6 +3521,25 @@ same things too, like the blur. */
     [self insertSubview:blurView atIndex:0];
     self.backgroundColor = [UIColor clearColor];
     self.contentView.backgroundColor = [UIColor clearColor];
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
 
 - (void)layoutSubviews {
@@ -3207,6 +3554,28 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -3214,7 +3583,7 @@ same things too, like the blur. */
 
 %end
 
-/* Hook for CKBackgroundDecorationView - apply thinner blur */
+/* Hook for CKBackgroundDecorationView - apply neutral blur */
 %hook CKBackgroundDecorationView
 
 - (void)didMoveToWindow {
@@ -3231,8 +3600,8 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add thinner blur effect
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -3241,6 +3610,25 @@ same things too, like the blur. */
     
     [self insertSubview:blurView atIndex:0];
     self.backgroundColor = [UIColor clearColor];
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
 
 - (void)layoutSubviews {
@@ -3255,6 +3643,28 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -3262,9 +3672,9 @@ same things too, like the blur. */
 
 %end
 
-/* Hook for CKDetailsChatOptionsCell - apply thinner blur */
-/* Hook for CKDetailsChatOptionsCell - apply thinner blur, fixed to cover entire cell */
+/* Hook for CKDetailsChatOptionsCell - apply neutral blur */
 %hook CKDetailsChatOptionsCell
+
 - (void)didMoveToWindow {
     %orig;
     
@@ -3284,12 +3694,11 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add thinner blur effect to self (not contentView) to cover entire cell
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect to self (not contentView) to cover entire cell
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    // Don't set corner radius on blur view - let cell's clipping handle it
     blurView.layer.cornerRadius = 0;
     blurView.clipsToBounds = NO;
     
@@ -3299,7 +3708,27 @@ same things too, like the blur. */
     
     // Ensure the cell itself clips to its bounds with its corner radius
     self.clipsToBounds = YES;
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
+
 - (void)layoutSubviews {
     %orig;
     
@@ -3313,6 +3742,28 @@ same things too, like the blur. */
             subview.frame = self.bounds;
             // Keep corner radius at 0 so blur extends to edges
             subview.layer.cornerRadius = 0;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -3320,6 +3771,7 @@ same things too, like the blur. */
     // Make sure cell clips to its bounds
     self.clipsToBounds = YES;
 }
+
 %end
 
 %hook CKRecipientSelectionView
@@ -4441,42 +4893,35 @@ same things too, like the blur. */
     // Desaturate and reduce opacity
     CGFloat h, s, b, a;
     if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
-        s *= 0.6; // Reduce saturation to 60%
-        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6]; // 60% opacity
+        s *= 0.6;
+        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6];
     }
 
-    // Set placeholder color using attributed string
+    // Set placeholder color
     if (self.placeholder) {
         NSDictionary *attributes = @{NSForegroundColorAttributeName: accent};
         self.attributedPlaceholder = [[NSAttributedString alloc] initWithString:self.placeholder attributes:attributes];
     }
     
-    // Color the search icon (magnifying glass)
+    // Only set TINT COLOR, not alpha - let the UISearchBar hook handle alpha
     UIImageView *leftView = (UIImageView *)self.leftView;
     if (leftView && [leftView isKindOfClass:[UIImageView class]]) {
         leftView.tintColor = accent;
-        leftView.alpha = 0.6;
     }
     
-    // Color any other icons (like microphone on the right)
     if (self.rightView) {
         self.rightView.tintColor = accent;
-        self.rightView.alpha = 0.6;
         
-        // Also check for nested image views
         for (UIView *subview in self.rightView.subviews) {
             if ([subview isKindOfClass:[UIImageView class]]) {
                 subview.tintColor = accent;
-                subview.alpha = 0.6;
             }
         }
     }
     
-    // Apply tint to all imageViews in the text field
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIImageView class]]) {
             subview.tintColor = accent;
-            subview.alpha = 0.6;
         }
     }
 }
@@ -4491,11 +4936,10 @@ same things too, like the blur. */
     UIColor *accent = getSystemTintColor();
     if (!accent) return;
     
-    // Desaturate and reduce opacity
     CGFloat h, s, b, a;
     if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
-        s *= 0.6; // Reduce saturation to 60%
-        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6]; // 60% opacity
+        s *= 0.6;
+        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6];
     }
     
     // Reapply placeholder color
@@ -4504,20 +4948,96 @@ same things too, like the blur. */
         self.attributedPlaceholder = [[NSAttributedString alloc] initWithString:self.placeholder attributes:attributes];
     }
     
+    // Only set TINT COLOR, not alpha
     if (self.leftView) {
         self.leftView.tintColor = accent;
-        self.leftView.alpha = 0.6;
     }
     
     if (self.rightView) {
         self.rightView.tintColor = accent;
-        self.rightView.alpha = 0.6;
     }
     
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIImageView class]]) {
             subview.tintColor = accent;
-            subview.alpha = 0.6;
+        }
+    }
+}
+
+%end
+
+%hook UISearchBar
+
+- (void)setAlpha:(CGFloat)alpha {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Find the UISearchTextField and sync its accessories
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:%c(UISearchTextField)]) {
+            UISearchTextField *textField = (UISearchTextField *)subview;
+            
+            // If search bar is becoming invisible, hide accessories completely
+            // Otherwise, use the styled alpha (0.6)
+            CGFloat accessoryAlpha = (alpha < 0.1) ? 0.0 : (alpha * 0.6);
+            
+            if (textField.leftView) {
+                textField.leftView.alpha = accessoryAlpha;
+            }
+            if (textField.rightView) {
+                textField.rightView.alpha = accessoryAlpha;
+                for (UIView *rvSubview in textField.rightView.subviews) {
+                    if ([rvSubview isKindOfClass:[UIImageView class]]) {
+                        rvSubview.alpha = accessoryAlpha;
+                    }
+                }
+            }
+            
+            for (UIView *tfSubview in textField.subviews) {
+                if ([tfSubview isKindOfClass:[UIImageView class]]) {
+                    tfSubview.alpha = accessoryAlpha;
+                }
+            }
+        }
+    }
+}
+
+- (void)setTransform:(CGAffineTransform)transform {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    // Find the UISearchTextField and sync its accessories based on transform
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:%c(UISearchTextField)]) {
+            UISearchTextField *textField = (UISearchTextField *)subview;
+            
+            // If search bar is transformed away (ty > 10), hide accessories
+            // Otherwise use normal styled alpha
+            CGFloat accessoryAlpha = (fabs(transform.ty) > 10) ? 0.0 : 0.6;
+            
+            if (textField.leftView) {
+                textField.leftView.alpha = accessoryAlpha;
+            }
+            if (textField.rightView) {
+                textField.rightView.alpha = accessoryAlpha;
+                for (UIView *rvSubview in textField.rightView.subviews) {
+                    if ([rvSubview isKindOfClass:[UIImageView class]]) {
+                        rvSubview.alpha = accessoryAlpha;
+                    }
+                }
+            }
+            
+            for (UIView *tfSubview in textField.subviews) {
+                if ([tfSubview isKindOfClass:[UIImageView class]]) {
+                    tfSubview.alpha = accessoryAlpha;
+                }
+            }
         }
     }
 }
@@ -4526,44 +5046,79 @@ same things too, like the blur. */
 
 %hook CKDetailsSearchResultsTitleHeaderCell
 
-- (void)layoutSubviews {
+- (void)didMoveToWindow {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+    if (!isTweakEnabled()) {
         return;
     }
     
-    UIColor *titleColor = getTitleTextColor();
-    if (!titleColor) {
-        return;
+    // Only apply custom styling if Modern NavBar is enabled
+    if (isModernNavBarEnabled()) {
+        self.backgroundColor = [UIColor clearColor];
+        
+        // Hide separator views and make backgrounds clear
+        for (UIView *subview in self.subviews) {
+            if ([subview class] == [UIView class]) {
+                if (subview.frame.size.height < 2) {
+                    // This is a separator
+                    subview.hidden = YES;
+                    subview.alpha = 0.0;
+                } else {
+                    // Regular background view
+                    subview.backgroundColor = [UIColor clearColor];
+                }
+            }
+        }
     }
     
-    // Find and color UILabels in this cell
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)subview;
-            label.textColor = titleColor;
+    // Text color can still apply
+    if (isCustomTextColorsEnabled()) {
+        UIColor *titleColor = getTitleTextColor();
+        if (titleColor) {
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    label.textColor = titleColor;
+                }
+            }
         }
     }
 }
 
-- (void)didMoveToWindow {
+- (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomTextColorsEnabled() || !self.window) {
+    if (!isTweakEnabled()) {
         return;
     }
     
-    UIColor *titleColor = getTitleTextColor();
-    if (!titleColor) {
-        return;
+    // Only apply clear backgrounds if Modern NavBar is enabled
+    if (isModernNavBarEnabled()) {
+        self.backgroundColor = [UIColor clearColor];
+        
+        // Re-hide separators and clear backgrounds after layout
+        for (UIView *subview in self.subviews) {
+            if ([subview class] == [UIView class]) {
+                if (subview.frame.size.height < 2) {
+                    subview.hidden = YES;
+                    subview.alpha = 0.0;
+                } else {
+                    subview.backgroundColor = [UIColor clearColor];
+                }
+            }
+        }
     }
     
-    // Find and color UILabels in this cell
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)subview;
-            label.textColor = titleColor;
+    if (isCustomTextColorsEnabled()) {
+        UIColor *titleColor = getTitleTextColor();
+        if (titleColor) {
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    label.textColor = titleColor;
+                }
+            }
         }
     }
 }
@@ -4572,44 +5127,71 @@ same things too, like the blur. */
 
 %hook CKSearchResultsTitleHeaderCell
 
-- (void)layoutSubviews {
+- (void)didMoveToWindow {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
+    if (!isTweakEnabled()) {
         return;
     }
     
-    UIColor *titleColor = getTitleTextColor();
-    if (!titleColor) {
-        return;
+    // Only apply custom styling if Modern NavBar is enabled
+    if (isModernNavBarEnabled()) {
+        self.backgroundColor = [UIColor clearColor];
+        
+        // Hide separator views
+        for (UIView *subview in self.subviews) {
+            // Check for separator views (usually small height views)
+            if ([subview class] == [UIView class] && subview.frame.size.height < 2) {
+                subview.hidden = YES;
+                subview.alpha = 0.0;
+            }
+        }
     }
     
-    // Find and color UILabels in this cell
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)subview;
-            label.textColor = titleColor;
+    // Text color code
+    if (isCustomTextColorsEnabled()) {
+        UIColor *titleColor = getTitleTextColor();
+        if (titleColor) {
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    label.textColor = titleColor;
+                }
+            }
         }
     }
 }
 
-- (void)didMoveToWindow {
+- (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomTextColorsEnabled() || !self.window) {
+    if (!isTweakEnabled()) {
         return;
     }
     
-    UIColor *titleColor = getTitleTextColor();
-    if (!titleColor) {
-        return;
+    // Only apply clear backgrounds if Modern NavBar is enabled
+    if (isModernNavBarEnabled()) {
+        self.backgroundColor = [UIColor clearColor];
+        
+        // Re-hide separators after layout
+        for (UIView *subview in self.subviews) {
+            if ([subview class] == [UIView class] && subview.frame.size.height < 2) {
+                subview.hidden = YES;
+                subview.alpha = 0.0;
+            }
+        }
     }
     
-    // Find and color UILabels in this cell
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)subview;
-            label.textColor = titleColor;
+    // Text color can still apply regardless
+    if (isCustomTextColorsEnabled()) {
+        UIColor *titleColor = getTitleTextColor();
+        if (titleColor) {
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)subview;
+                    label.textColor = titleColor;
+                }
+            }
         }
     }
 }
@@ -5021,8 +5603,8 @@ same things too, like the blur. */
         }
     }
     
-    // Create and add blur effect to self (not contentView)
-    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial];
+    // Create neutral blur effect to self (not contentView)
+    UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     blurView.frame = self.bounds;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -5033,6 +5615,25 @@ same things too, like the blur. */
     self.backgroundColor = [UIColor clearColor];
     self.contentView.backgroundColor = [UIColor clearColor];
     self.clipsToBounds = YES;
+    
+    // Neutralize the tinting subviews (but keep the blur)
+    for (UIView *subview in blurView.subviews) {
+        if ([subview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+            subview.backgroundColor = [UIColor clearColor];
+        }
+    }
+    
+    // Apply tint if enabled
+    if (isCellBlurTintEnabled()) {
+        UIColor *tintColor = getCellBlurTintColor();
+        if (tintColor) {
+            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+            tintOverlay.userInteractionEnabled = NO;
+            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            [blurView.contentView addSubview:tintOverlay];
+        }
+    }
 }
 
 - (void)layoutSubviews {
@@ -5065,6 +5666,28 @@ same things too, like the blur. */
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
+            
+            // Keep neutralizing the tinting on layout
+            UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
+            for (UIView *blurSubview in blurView.subviews) {
+                if ([blurSubview isKindOfClass:%c(_UIVisualEffectSubview)]) {
+                    blurSubview.backgroundColor = [UIColor clearColor];
+                }
+            }
+            
+            // Update tint overlay if it exists
+            if (isCellBlurTintEnabled()) {
+                UIColor *tintColor = getCellBlurTintColor();
+                if (tintColor) {
+                    for (UIView *contentSubview in blurView.contentView.subviews) {
+                        if ([contentSubview class] == [UIView class]) {
+                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
+                            contentSubview.frame = blurView.contentView.bounds;
+                            break;
+                        }
+                    }
+                }
+            }
             break;
         }
     }
@@ -5106,6 +5729,382 @@ same things too, like the blur. */
                     logToFile([NSString stringWithFormat:@"Replacing highlight color with accent color"]);
                     highlightLayer.backgroundColor = accentColor.CGColor;
                 }
+            }
+        }
+    }
+}
+
+%end
+
+%hook CKCanvasBackButtonView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled()) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Create a lighter version of the accent color
+    CGFloat h, s, b, a;
+    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        // Lighten by increasing brightness and reducing saturation
+        s *= 0.5;  // Reduce saturation to 50%
+        b = MIN(1.0, b * 1.3);  // Increase brightness by 30%
+        customTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+    }
+    
+    // Find the UIView container, then the UILabel inside it
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIView class]]) {
+            for (UIView *innerView in subview.subviews) {
+                if ([innerView isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)innerView;
+                    label.textColor = customTint;
+                }
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *customTint = getSystemTintColor();
+    if (!customTint) {
+        return;
+    }
+    
+    // Create a lighter version of the accent color
+    CGFloat h, s, b, a;
+    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        s *= 0.5;
+        b = MIN(1.0, b * 1.3);
+        customTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+    }
+    
+    // Find the UIView container, then the UILabel inside it
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIView class]]) {
+            for (UIView *innerView in subview.subviews) {
+                if ([innerView isKindOfClass:[UILabel class]]) {
+                    UILabel *label = (UILabel *)innerView;
+                    label.textColor = customTint;
+                }
+            }
+        }
+    }
+}
+
+%end
+
+
+%hook CKPinnedConversationTypingBubble
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *typingColor = getReceivedBubbleColor();
+    if (!typingColor) {
+        return;
+    }
+    
+    // Color the backdrop layer (Layer 2)
+    if (self.layer.sublayers.count >= 3) {
+        CALayer *backdropLayer = self.layer.sublayers[2];
+        if ([backdropLayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
+            backdropLayer.backgroundColor = typingColor.CGColor;
+        }
+    }
+    
+    // Color the typing dots (Layer 3 contains a CAReplicatorLayer with the dots)
+    if (self.layer.sublayers.count >= 4) {
+        CALayer *dotsContainerLayer = self.layer.sublayers[3];
+        
+        // Calculate a contrasting color for the dots
+        CGFloat h, s, b, a;
+        if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            // Adjust brightness for dot visibility
+            if (b > 0.5) {
+                b *= 0.4; // Darken significantly for light bubbles
+            } else {
+                b = MIN(1.0, b * 2.0); // Lighten significantly for dark bubbles
+            }
+            UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            
+            // The CAReplicatorLayer is a sublayer
+            if (dotsContainerLayer.sublayers.count > 0) {
+                CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainerLayer.sublayers[0];
+                
+                // The replicator layer replicates a single instance layer
+                // We need to color that instance
+                if ([replicatorLayer.sublayers firstObject]) {
+                    CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
+                    instanceLayer.backgroundColor = dotColor.CGColor;
+                }
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *typingColor = getReceivedBubbleColor();
+    if (!typingColor) {
+        return;
+    }
+    
+    // Color the backdrop layer
+    if (self.layer.sublayers.count >= 3) {
+        CALayer *backdropLayer = self.layer.sublayers[2];
+        if ([backdropLayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
+            backdropLayer.backgroundColor = typingColor.CGColor;
+        }
+    }
+    
+    // Color the typing dots
+    if (self.layer.sublayers.count >= 4) {
+        CALayer *dotsContainerLayer = self.layer.sublayers[3];
+        
+        CGFloat h, s, b, a;
+        if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            if (b > 0.5) {
+                b *= 0.4;
+            } else {
+                b = MIN(1.0, b * 2.0);
+            }
+            UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            
+            if (dotsContainerLayer.sublayers.count > 0) {
+                CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainerLayer.sublayers[0];
+                if ([replicatorLayer.sublayers firstObject]) {
+                    CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
+                    instanceLayer.backgroundColor = dotColor.CGColor;
+                }
+            }
+        }
+    }
+}
+
+%end
+
+%hook CKConversationListTypingIndicatorView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    UIColor *typingColor = getReceivedBubbleColor();
+    if (!typingColor) {
+        return;
+    }
+    
+    // Get the typing layer via KVC
+    CALayer *typingLayer = nil;
+    @try {
+        typingLayer = [self valueForKey:@"typingLayer"];
+    } @catch (NSException *e) {
+        return;
+    }
+    
+    if (!typingLayer || typingLayer.sublayers.count < 2) {
+        return;
+    }
+    
+    // Sublayer 0 contains the bubble background layers
+    CALayer *bubbleContainer = typingLayer.sublayers[0];
+    if (bubbleContainer.sublayers.count >= 3) {
+        // Color all three bubble parts
+        for (CALayer *bubbleLayer in bubbleContainer.sublayers) {
+            bubbleLayer.backgroundColor = typingColor.CGColor;
+        }
+    }
+    
+    // Sublayer 1 contains the typing dots (CAReplicatorLayer)
+    CALayer *dotsContainer = typingLayer.sublayers[1];
+    if (dotsContainer.sublayers.count > 0) {
+        CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainer.sublayers[0];
+        
+        // Calculate contrasting color for the dots
+        CGFloat h, s, b, a;
+        if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            // Adjust brightness for dot visibility
+            if (b > 0.5) {
+                b *= 0.4; // Darken significantly for light bubbles
+            } else {
+                b = MIN(1.0, b * 2.0); // Lighten significantly for dark bubbles
+            }
+            UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            
+            // Color the instance layer that gets replicated
+            if ([replicatorLayer.sublayers firstObject]) {
+                CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
+                instanceLayer.backgroundColor = dotColor.CGColor;
+            }
+        }
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    UIColor *typingColor = getReceivedBubbleColor();
+    if (!typingColor) {
+        return;
+    }
+    
+    // Get the typing layer via KVC
+    CALayer *typingLayer = nil;
+    @try {
+        typingLayer = [self valueForKey:@"typingLayer"];
+    } @catch (NSException *e) {
+        return;
+    }
+    
+    if (!typingLayer || typingLayer.sublayers.count < 2) {
+        return;
+    }
+    
+    // Color the bubble background layers
+    CALayer *bubbleContainer = typingLayer.sublayers[0];
+    if (bubbleContainer.sublayers.count >= 3) {
+        for (CALayer *bubbleLayer in bubbleContainer.sublayers) {
+            bubbleLayer.backgroundColor = typingColor.CGColor;
+        }
+    }
+    
+    // Color the typing dots
+    CALayer *dotsContainer = typingLayer.sublayers[1];
+    if (dotsContainer.sublayers.count > 0) {
+        CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainer.sublayers[0];
+        
+        CGFloat h, s, b, a;
+        if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            if (b > 0.5) {
+                b *= 0.4;
+            } else {
+                b = MIN(1.0, b * 2.0);
+            }
+            UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            
+            if ([replicatorLayer.sublayers firstObject]) {
+                CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
+                instanceLayer.backgroundColor = dotColor.CGColor;
+            }
+        }
+    }
+}
+
+%end
+
+%hook CKTypingView
+
+- (void)layoutSubviews {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    [self applyTypingIndicatorColors];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+        return;
+    }
+    
+    [self applyTypingIndicatorColors];
+}
+
+- (void)setIndicatorLayer:(CALayer *)layer {
+    %orig;
+    
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+        return;
+    }
+    
+    // Color immediately when the layer is set
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self applyTypingIndicatorColors];
+    });
+}
+
+%new
+- (void)applyTypingIndicatorColors {
+    UIColor *typingColor = getReceivedBubbleColor();
+    if (!typingColor) {
+        return;
+    }
+    
+    // Get the indicator layer via KVC
+    CALayer *indicatorLayer = nil;
+    @try {
+        indicatorLayer = [self valueForKey:@"indicatorLayer"];
+    } @catch (NSException *e) {
+        return;
+    }
+    
+    if (!indicatorLayer || indicatorLayer.sublayers.count < 2) {
+        return;
+    }
+    
+    // Sublayer 0 contains the bubble background layers (3 layers: 2 circles + 1 rectangle)
+    CALayer *bubbleContainer = indicatorLayer.sublayers[0];
+    if (bubbleContainer.sublayers.count >= 3) {
+        // Color all three bubble parts
+        for (CALayer *bubbleLayer in bubbleContainer.sublayers) {
+            bubbleLayer.backgroundColor = typingColor.CGColor;
+        }
+    }
+    
+    // Sublayer 1 contains the typing dots (CAReplicatorLayer)
+    CALayer *dotsContainer = indicatorLayer.sublayers[1];
+    if (dotsContainer.sublayers.count > 0) {
+        CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainer.sublayers[0];
+        
+        // Calculate contrasting color for the dots
+        CGFloat h, s, b, a;
+        if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            // Adjust brightness for dot visibility
+            if (b > 0.5) {
+                b *= 0.4; // Darken significantly for light bubbles
+            } else {
+                b = MIN(1.0, b * 2.0); // Lighten significantly for dark bubbles
+            }
+            UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            
+            // Color the instance layer that gets replicated
+            if ([replicatorLayer.sublayers firstObject]) {
+                CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
+                instanceLayer.backgroundColor = dotColor.CGColor;
             }
         }
     }

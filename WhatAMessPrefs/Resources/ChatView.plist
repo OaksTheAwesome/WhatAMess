@@ -171,6 +171,34 @@
     		<string>Modern Message Bar</string>
 		</dict>
 		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Message Bar Customization</string>
+			<key>footerText</key>
+			<string>Tints the message bar's default blur. Similar to the modern NavBar, only works if modern Message Bar is disabled.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>key</key>
+			<string>isMessageBarCustomizationEnabled</string>
+			<key>label</key>
+			<string>Message Bar Customization</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Message Bar Tint Color</string>
+			<key>action</key>
+			<string>pickMessageBarTintColor</string>
+		</dict>
+		<dict>
     		<key>cell</key>
     		<string>PSGroupCell</string>
     		<key>label</key>

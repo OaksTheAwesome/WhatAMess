@@ -19,6 +19,16 @@
     [self showColorPicker];
 }
 
+- (void)pickNavBarTintColor {
+    _currentColorKey = @"navBarTintColor";
+    [self showColorPicker];
+}
+
+- (void)pickCellTintColor {
+    _currentColorKey = @"cellTintColor";
+    [self showColorPicker];
+}
+
  /* Runs before settings view disappears. Sends notification to be seen by other processes to know if
  a preference has been changed. Signals tweak to reload settings following leaving settings pane. */
 - (void)viewWillDisappear:(BOOL)animated {

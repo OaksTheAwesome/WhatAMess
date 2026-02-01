@@ -5,7 +5,7 @@
 @implementation WAMRootListController {
 	NSString *_currentColorKey;
 }
- /* Essentially sets up prefences in Settings, fetches plist */
+ // Essentially sets up prefences in Settings, fetches plist
 - (NSArray *)specifiers {
 	if (!_specifiers) {
 		_specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
@@ -29,8 +29,7 @@
     [self showColorPicker];
 }
 
- /* Runs before settings view disappears. Sends notification to be seen by other processes to know if
- a preference has been changed. Signals tweak to reload settings following leaving settings pane. */
+ // Posts preference change after window is closed.
 - (void)viewWillDisappear:(BOOL)animated {
 	[super viewWillDisappear:animated];
 	
@@ -42,7 +41,7 @@
 	);
 }
 
-/* Resping method lol */
+// Resping method lol 
 - (void)respring {
 	/* Confirmation alert dialog */
 	UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Respring"
@@ -61,7 +60,9 @@
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
-/* Color Picker */
+/*====================
+ COLOR PICKER METHODS
+ ===================*/
 
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,
@@ -102,8 +103,6 @@ writes the changes immediately to the disk. Posts an update notification to appl
 
 /* Retrieves RGB and alpha from a UIColor, and converts each component from 0-1 to 0-255, the hex format.
 Formats those ints as a hex string with a leading "#" while ensuring two digits/component.*/
-// DEBUG VERSION - Logs to file instead of NSLog
-// Replace both methods with these:
 
 - (NSString *)hexFromColor:(UIColor *)color {
     CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();

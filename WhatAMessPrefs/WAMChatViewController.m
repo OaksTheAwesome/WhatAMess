@@ -5,7 +5,6 @@
     NSString *_currentColorKey;
 }
 
-/* Loads specifiers from ChatView.plist. */
 - (NSArray *)specifiers {
 	if (!_specifiers) {
 		_specifiers = [self loadSpecifiersFromPlistName:@"ChatView" target:self];
@@ -14,13 +13,8 @@
 	return _specifiers;
 }
 
+/* Color Picker Functions */
 
-/*================
-   COLOR STUFFS
-=============== */
-
-
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickChatBackgroundColor {
 	_currentColorKey = @"chatBackgroundColor";
 	[self showColorPicker];
@@ -96,6 +90,9 @@
     [self showColorPicker];
 }
 
+/*====================
+ COLOR PICKER METHODS
+ ===================*/
 
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,

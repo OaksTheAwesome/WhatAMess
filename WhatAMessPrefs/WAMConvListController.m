@@ -13,37 +13,28 @@
 	return _specifiers;
 }
 
+/* Color Picker Functions */
 
-/*================
-   COLOR STUFFS
-=============== */
-
-
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickBackgroundColor {
 	_currentColorKey = @"convListBackgroundColor";
 	[self showColorPicker];
 }
 
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickCellColor {
 	_currentColorKey = @"convListCellColor";
 	[self showColorPicker];
 }
 
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickTitleColor {
 	_currentColorKey = @"titleTextColor";
 	[self showColorPicker];
 }
 
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickMessagePreviewColor {
 	_currentColorKey = @"messagePreviewTextColor";
 	[self showColorPicker];
 }
 
-/* Presents color picker and stores color to the indicated key in plist. */
 - (void)pickDateTimeColor {
 	_currentColorKey = @"dateTimeTextColor";
 	[self showColorPicker];
@@ -58,6 +49,15 @@
     _currentColorKey = @"pinnedBubbleTextColor";
     [self showColorPicker];
 }
+
+- (void)pickConversationListTitleColor {
+	_currentColorKey = @"conversationListTitleColor";
+	[self showColorPicker];
+}
+
+/*====================
+ COLOR PICKER METHODS
+ ===================*/
 
 /* Creates a color picker, delegates to self so that code can respond to picked color, and allows alpha.
 Loads tweak prefs, and reads the currently stored color in that key. When color is already stored in prefs,
@@ -108,8 +108,6 @@ writes the changes immediately to the disk. Posts an update notification to appl
 
 /* Retrieves RGB and alpha from a UIColor, and converts each component from 0-1 to 0-255, the hex format.
 Formats those ints as a hex string with a leading "#" while ensuring two digits/component.*/
-// DEBUG VERSION - Logs to file instead of NSLog
-// Replace both methods with these:
 
 - (NSString *)hexFromColor:(UIColor *)color {
     CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
@@ -204,12 +202,6 @@ by 255, and returns. */
     }
     
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
-}
-
-/* Prepares color picker and stores the key so the color picker knows what prefs to load/save. */
-- (void)openConversationListTitleColorPicker {
-	_currentColorKey = @"conversationListTitleColor";
-	[self showColorPicker];
 }
 
 

@@ -1,8 +1,8 @@
 Package: com.oakstheawesome.whatamess
 Name: WhatAMess
-Version: 0.0.1
+Version: 1.0.0
 Architecture: iphoneos-arm
-Description: An awesome MobileSubstrate tweak!
+Description: Messy, messy Messages.
 Maintainer: OaksTheAwesome
 Author: OaksTheAwesome
 Section: Tweaks

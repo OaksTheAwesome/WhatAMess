@@ -1,272 +1,18 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <WAMTweakInterfaces.h>
 
-/*Interfaces, declare to hook certain things. Ex: Want to change label colors, hook CKLabel,
-inherits attributes from UILabel*/
-/*---------------------------------------------------*/
-@interface CKConversationListCollectionViewController : UICollectionViewController
--(void)updateBackground;
--(void)makeSubviewsTransparent:(UIView *)view;
-- (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
-@end
-
-@interface CKTranscriptCollectionViewController : UIViewController
-@end
-
-@interface CKGradientReferenceView : UIView
-@end
-
-@interface CKMessagesController : UIViewController
-@end
-
-@interface _UIBarBackground : UIView
-- (void)createOurBlur;
-- (void)removeSystemViews;
-- (void)ensureBlurExists;
-- (BOOL)findContactViewInWindow:(UIView *)view;
-@end
-
-@interface _UICollectionViewListSeparatorView : UIView
-@end
-
-@interface _UISearchBarSearchFieldBackgroundView : UIView
-@end
-
-@interface CKPinnedConversationView : UIView
-@end
-
-@class CKConversationListCollectionViewController;
-
-@interface _UINavigationBarTitleControl : UIControl
-@end
-
-@interface _UIVisualEffectBackdropView : UIView
-@end
-
-@interface UIView (Private)
-- (UIViewController *)_viewControllerForAncestor;
-@end
-
-@interface CKLabel : UILabel
-@end
-
-@interface UIDateLabel : UILabel
-@end
-
-@interface CKDateLabel : UIDateLabel
-@end
-
-@interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
-@end
-
-@interface CKGradientView : UIView
-- (void)setColors:(NSArray *)colors;
-- (NSArray *)colors;
-- (BOOL)isInsideReactionBubble;
-- (void)applyColorRecursively:(UIColor *)color;
-@end
-
-@interface CKBalloonImageView : UIImageView
-@property (nonatomic, strong) UIImage *image;
-@end
-
-@interface CKColoredBalloonView : UIView
-@property (nonatomic, assign) int color;
-@end
-
-@interface CKBalloonTextView : UITextView
-- (void)updateTextColorForBalloon;
-- (UIColor *)getCustomTextColor;
-@end
-
-@interface CKTranscriptStatusCell : UICollectionViewCell
-@end
-
-@interface CKTranscriptLabelCell : UICollectionViewCell
-@end
-
-@interface _UIVisualEffectContentView : UIView
-@end
-
-@interface _UIVisualEffectSubview : UIView
-@end
-
-@interface CKMessageEntryView : UIView
-- (void)applyInputFieldCustomization;
-- (UITextView *)findTextView:(UIView *)view;
-- (UIView *)findRoundedView:(UIView *)view;
-- (UIView *)findViewByClassName:(UIView *)view;
-@end
-
-@interface UIKBVisualEffectView : UIVisualEffectView
-@end
-
-@interface CKMessageEntryRichTextView : UITextView
-@end
-
-@interface CKEntryViewButton : UIView
-@end
-
-@interface CKDetailsTableView : UITableView
-@end
-
-@interface _UITableViewHeaderFooterContentView : UIView
-@end
-
-@interface CNGroupIdentityHeaderContainerView : UIView
-- (void)applyContactNameColor;
-@end
-
-@interface CKGroupPhotoCell : UIView
-@end
-
-@interface CNActionView : UIView
-- (void)matchIconToLabelAlpha;
-- (void)updateIconOpacity;
-@end
-
-@interface CKTranscriptDetailsResizableCell : UICollectionViewCell
-@end
-
-@interface CKDetailsSharedWithYouCell : UITableViewCell
-@end
-
-@interface CKDetailsChatOptionsCell : UITableViewCell
-@end
-
-@interface CKBackgroundDecorationView : UICollectionReusableView
-@end
-
-@interface CKRecipientSelectionView : UIView
-- (void)updateRecipientBackground;
-@end
-
-@interface CKComposeRecipientView : UIView
-@end
-
-@interface UITableViewLabel : UILabel
-@end
-
-@interface CKQuickActionSaveButton : UIView
-@end
-
-@interface UIButtonLabel : UILabel
-@end
-
-@interface _UIPlatterClippingView : UIView
-@end
-
-@interface _UIPlatterTransformView : UIView
-@end
-
-@interface _UISystemBackgroundView : UIView
-@end
-
-@interface CKTranscriptReportSpamCell : UIView
-- (void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color;
-@end
-
-@interface CKThumbsUpAcknowledgmentGlyphView : UIView
-@end
-
-@interface CKAggregateAcknowledgementBalloonView : UIView
-- (void)applyGlyphTintRecursively:(UIView *)view;
-@end
-
-@interface CKAcknowledgmentGlyphImageView : UIView
-@property (nonatomic, strong) UIColor *tintColor;
-- (void)setImage:(UIImage *)image;
-@end
-
-@interface CKTranscriptUnavailabilityIndicatorCell : UICollectionViewCell
-- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
-- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
-@end
-
-@interface CKSendMenuPresentationPopoverBackdropView : UIView
-@end
-
-@interface CKSearchCollectionView : UICollectionView
-@end
-
-@interface UINavigationButton : UIView
-@end
-
-@interface _UINavigationBarLargeTitleView : UIView
-@end
-
-@interface UIViewControllerWrapperView : UIView
-@end
-
-@interface CKTranscriptNotifyAnywayButtonCell : UICollectionViewCell
-@end
-
-@interface CKEntryViewBlurrableButtonContainer : UIView
-@end
-
-@interface LPFlippedView : UIView
-@end
-
-@interface LPTextView : UIView
-@end
-
-@interface LPImageView : UIView
-@end
-
-@interface CKDetailsSearchResultsTitleHeaderCell : UIView
-@end
-
-@interface CKSearchResultsTitleHeaderCell : UIView
-@end
-
-@interface CKAvatarTitleCollectionReusableView : UIView
-@end
-
-@interface CKMessageAcknowledgmentPickerBarView: UIView
-@end
-
-@interface CKPinnedConversationSummaryBubble : UIView
-@end
-
-@interface CNContactView : UIView
-@end
-
-@interface UITableViewWrapperView : UIView
-@end
-
-@interface CNContactHeaderDisplayView : UIView
-@end
-
-@interface CNContactActionsContainerView : UIView
-@end
-
-@interface CKMessageAcknowledgmentPickerBarItemViewPhone : UIView
-@end
-
-@interface CKCanvasBackButtonView : UIView
-@end
-
-@interface CKPinnedConversationTypingBubble : UIView
-@end
-
-@interface CKConversationListTypingIndicatorView : UIView
-@end
-
-@interface CKTypingView : UIView
-- (void)applyTypingIndicatorColors;
-@end
 
 /* ===================
   PREFERENCE THINGS 
 ==================== */
 
-
-/* Define paths for preferences to save to (in the case of kImagePath, where to save image
+/* Define paths for preferences to save to (in the case of kConvImagePath, where to save image
 and how to name it [background.jpg]). Notification is used to post the preference change and update tweak.
 In case of messages, no respring is *required*, just close and reopen app a couple of times. */
 /*--------------------------------------------------------------------------*/
 #define kPrefsPath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
-#define kImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
+#define kConvImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
 #define kChatImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 
@@ -289,38 +35,37 @@ static void clearPrefsCache() {
 	cachedPrefs = nil;
 }
 
-/* Checks whether tweak is enabled according to prefs. Reads from prefs directly. Converts key "isEnabled" to
-a boolean value, defaults to YES otherwise (if , for example, no preference has been set yet, like with fresh install). */
+
+
+/*=======================
+	BOOLEAN FUNCTIONS
+========================*/
+
 BOOL isTweakEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isEnabled"] ? [prefs[@"isEnabled"] boolValue] : YES;
 }
 
-/* Checks if Modern NavBar is enabled/disabled. Uses loadPrefs and defaults to YES. */
 BOOL isModernNavBarEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isModernNavBarEnabled"] ? [prefs[@"isModernNavBarEnabled"] boolValue] : YES;
 }
 
-/* Checks if separators are enabled/disabled. Uses loadPrefs and defaults to NO. */
 BOOL isSeparatorsEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isSeparatorsEnabled"] ? [prefs[@"isSeparatorsEnabled"] boolValue] : NO;
 }
 
-/* Checks if search bar background is enabled/disabled. Uses loadPrefs, defaults to NO (bar on/not affected). */
 BOOL isSearchBgEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isSearchBgEnabled"] ? [prefs[@"isSearchBgEnabled"] boolValue] : NO;
 }
 
-/* Checks if pinned conversation glow hiding is enabled/disabled. Uses loadPrefs, defaults to NO. */
 BOOL isPinnedGlowEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isPinnedGlowEnabled"] ? [prefs[@"isPinnedGlowEnabled"] boolValue] : NO;
 }
 
-/* Checks if conversation list bg is enabled. Reads directly from prefs. Defaults to YES. */
 BOOL isConvColorBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvColorBgEnabled"] ? [prefs[@"isConvColorBgEnabled"] boolValue] : YES;
@@ -331,7 +76,6 @@ BOOL isChatColorBgEnabled() {
 	return prefs[@"isChatColorBgEnabled"] ? [prefs[@"isChatColorBgEnabled"] boolValue] : NO;
 }
 
-/* Checks if conversation list image background is enabled. Reads directly from prefs. Defaults to NO. */
 BOOL isConvImageBgEnabled() {
 	NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
 	return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
@@ -342,7 +86,6 @@ BOOL isChatImageBgEnabled() {
 	return prefs[@"isChatImageBgEnabled"] ? [prefs[@"isChatImageBgEnabled"] boolValue] : NO;
 }
 
-/* Checks if custom text colors should be enabled. Uses loadPrefs, defaults to NO. */
 BOOL isCustomTextColorsEnabled() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"isCustomTextColorsEnabled"] ? [prefs[@"isCustomTextColorsEnabled"] boolValue] : NO;
@@ -389,18 +132,6 @@ BOOL isMessageBarButtonsEnabled() {
     return prefs[@"isMessageBarButtonsEnabled"] ? [prefs[@"isMessageBarButtonsEnabled"] boolValue] : NO;
 }
 
-BOOL isiOS17OrHigher() {
-    NSOperatingSystemVersion iOS17 = {17, 0, 0};
-    return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS17];
-}
-
-BOOL isDarkMode() {
-    if (@available(iOS 13.0, *)) {
-        return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
-    }
-    return NO;
-}
-
 BOOL isNavBarCustomizationEnabled() {
     NSDictionary *prefs = loadPrefs();
     return prefs[@"isNavBarCustomizationEnabled"] ? [prefs[@"isNavBarCustomizationEnabled"] boolValue] : NO;
@@ -416,8 +147,23 @@ BOOL isCellBlurTintEnabled() {
     return prefs[@"isCellBlurTintEnabled"] ? [prefs[@"isCellBlurTintEnabled"] boolValue] : NO;
 }
 
-/* Checks the amount of blur to apply to image based on user slider input. 
-Uses loadPrefs, defaults to 0.0 (no blurring). */
+BOOL isiOS17OrHigher() {
+    NSOperatingSystemVersion iOS17 = {17, 0, 0};
+    return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS17];
+}
+
+BOOL isDarkMode() {
+    if (@available(iOS 13.0, *)) {
+        return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+    }
+    return NO;
+}
+
+
+
+/*=======================
+	Numeric Getters
+=======================*/
 CGFloat getImageBlurAmount() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"imageBlurAmount"] ? [prefs[@"imageBlurAmount"] floatValue] : 0.0;
@@ -427,6 +173,12 @@ CGFloat getChatImageBlurAmount() {
 	NSDictionary *prefs = loadPrefs();
 	return prefs[@"chatImageBlurAmount"] ? [prefs[@"chatImageBlurAmount"] floatValue] : 0.0;
 }
+
+
+
+/*=================================
+	Helper and Getter Functions
+=================================*/
 
 /* Checks if input string is nil/empty. If it is, returns nil. If hex string has a leading "#", removes
 that and ensures scanner only sees hex digits. Converts the hex string to an int. NSScanner parses string
@@ -1049,8 +801,8 @@ changes.*/
 -(void)updateBackground {
 	clearPrefsCache();
 
-	BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kImagePath];
-	UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kImagePath] : nil;
+	BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kConvImagePath];
+	UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kConvImagePath] : nil;
 	
 	if (isConvColorBgEnabled()) {
 		UIView *colorView = [[UIView alloc] initWithFrame:self.collectionView.bounds];
@@ -3107,8 +2859,8 @@ same things too, like the blur. */
         }
     } else {
         // Apply image background from file path
-        BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kImagePath];
-        UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kImagePath] : nil;
+        BOOL hasImage = [[NSFileManager defaultManager] fileExistsAtPath:kConvImagePath];
+        UIImage *bgImage = hasImage ? [UIImage imageWithContentsOfFile:kConvImagePath] : nil;
         
         if (bgImage) {
             CGFloat blurAmount = getImageBlurAmount();
@@ -5810,13 +5562,14 @@ same things too, like the blur. */
 
 %hook CKPinnedConversationTypingBubble
 
-- (void)layoutSubviews {
+- (void)didMoveToWindow {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
         return;
     }
     
+    // Apply colors (works for both iOS 17 and 18)
     UIColor *typingColor = getReceivedBubbleColor();
     if (!typingColor) {
         return;
@@ -5830,27 +5583,21 @@ same things too, like the blur. */
         }
     }
     
-    // Color the typing dots (Layer 3 contains a CAReplicatorLayer with the dots)
+    // Color the typing dots (Layer 3)
     if (self.layer.sublayers.count >= 4) {
         CALayer *dotsContainerLayer = self.layer.sublayers[3];
         
-        // Calculate a contrasting color for the dots
         CGFloat h, s, b, a;
         if ([typingColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
-            // Adjust brightness for dot visibility
             if (b > 0.5) {
-                b *= 0.4; // Darken significantly for light bubbles
+                b *= 0.4;
             } else {
-                b = MIN(1.0, b * 2.0); // Lighten significantly for dark bubbles
+                b = MIN(1.0, b * 2.0);
             }
             UIColor *dotColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
             
-            // The CAReplicatorLayer is a sublayer
             if (dotsContainerLayer.sublayers.count > 0) {
                 CAReplicatorLayer *replicatorLayer = (CAReplicatorLayer *)dotsContainerLayer.sublayers[0];
-                
-                // The replicator layer replicates a single instance layer
-                // We need to color that instance
                 if ([replicatorLayer.sublayers firstObject]) {
                     CALayer *instanceLayer = [replicatorLayer.sublayers firstObject];
                     instanceLayer.backgroundColor = dotColor.CGColor;
@@ -5860,19 +5607,20 @@ same things too, like the blur. */
     }
 }
 
-- (void)didMoveToWindow {
+- (void)layoutSubviews {
     %orig;
     
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) {
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) {
         return;
     }
     
+    // Apply colors during layout (important for iOS 17 where frames are set later)
     UIColor *typingColor = getReceivedBubbleColor();
     if (!typingColor) {
         return;
     }
     
-    // Color the backdrop layer
+    // Color the backdrop layer (Layer 2)
     if (self.layer.sublayers.count >= 3) {
         CALayer *backdropLayer = self.layer.sublayers[2];
         if ([backdropLayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
@@ -5880,7 +5628,7 @@ same things too, like the blur. */
         }
     }
     
-    // Color the typing dots
+    // Color the typing dots (Layer 3)
     if (self.layer.sublayers.count >= 4) {
         CALayer *dotsContainerLayer = self.layer.sublayers[3];
         

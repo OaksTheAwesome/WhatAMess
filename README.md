@@ -59,3 +59,32 @@ Please keep in mind this is my _first tweak_ and I'm still getting familiar with
 - "Notify Anyway" text shown after sending a message to another user in DND mode may revert back to system color when leaving and reopening window.
 - Link Bubbles in Pinned Message Previews sometimes break, displaying a square instead of a bubble.
 - Contact "Info" view on iOS 17 is slightly broken.
+
+## Features I'd Like to Add
+- Preset Sharing
+- Custom Large Title
+- Redesigned Conversation Cells
+- Better User Images + Name at Top of Chat View
+- Your Suggestions!
+
+## Who Am I Anyways?
+Hey! I'm OaksTheAwesome, Oak shorthand. 
+
+First thing's first, I'm no developer by any means. I took some extremely basic python, HTML, and java in highschool, and a singular python class in college. I'm relatively familiar with Java, but Obj-C was only something I stabbed at recently.
+
+Full time college student, part time job, busy life and all the typical things. I primarily focus on my YouTube channel in my creative efforts, that being commentary with a gaming/VR focus. I take on the occasional random project like this when I feel like it. :)
+
+I got interested in jailbreaking back on iOS 11 with my 6th Gen iPod Touch. I've used a jailbroken iDevice almost every day since. After losing my XS on 14.6, I missed the messages customization tweaks of old. So, instead of waiting around for some update or someone to release one, I just attempted to make one myself. Roughly 9 months later and here I am. I hope you enjoy this little thing of mine!
+
+## Questions? Bugs? Feature Requests?
+Feel free to reach out to me and check me out at any of the following and I'll try my best to respond! _(I'm not the MOST active on these platforms so bear with me.)_
+
+Here on GitHub! Open an Issue!
+
+Discord: OaksTheAwesome
+
+Twitter: [OaksTheAwesome](https://x.com/OaksTheAwesome)
+
+Email Me: [Email](oaknintendo@gmail.com)
+
+Check me out on YouTube: [YouTube](https://www.youtube.com/@oakstheawesome)

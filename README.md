@@ -1,5 +1,5 @@
 # WhatAMess
-***Make your Messages app as clean (or messy) as you want.***
+**Make your Messages app as clean (or messy) as you want.**
 
 _Designed with iOS 16 in mind, tested on NathanLR on iOS 17._
 
@@ -41,3 +41,7 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 - Input Text Color
 - Camera/App Drawer Tint
 - Link Bubble Background + Text Color
+
+## Compatability
+WhatAMess is compatible with devices running a _rootless_ jailbreak on iOS 16. ***Rootful support coming soon!***
+The tweak was also tested on (and has a few specific hooks for) iOS 17, NathanLR, on a 2018 11" iPad Pro. That was the only other "jailbroken" device I had for testing. Technically speaking it should be mostly fine on iOS 17/NathanLR.

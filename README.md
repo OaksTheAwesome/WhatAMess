@@ -10,3 +10,12 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 
 ## Features
 
+# General/App-Wide
+- Change App-Wide Tint Color
+- Modern NavBar: a navigation bar that blurs content closer to the top of the screen. (Inspired by Messages on iOS 26. Togglable)
+- Stock NavBar Tinting
+- Cell Tinting
+
+# Conversation List View
+- Custom Background Iolor (Pinned and Cells separately)
+- Custom Background Image

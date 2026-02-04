@@ -46,7 +46,16 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 WhatAMess is compatible with devices running a _rootless_ jailbreak on iOS 16. ***Rootful support coming soon!***
 The tweak was also tested on (and has a few specific hooks for) iOS 17, NathanLR, on a 2018 11" iPad Pro. That was the only other "jailbroken" device I had for testing. Technically speaking it should be mostly fine on iOS 17/NathanLR.
 
-Compatability with the following is unknown/uncertain as I don't have the devices to test it. Again, logically speaking, it _should_ as this is simple enough. If the tweak works on any of these, _please let me know_:
+Compatability with the following is unknown/uncertain as I don't have the devices to test it but, considering the tweak injects into Messages only, it should be fine. If the tweak works, confirmed, on any of these, _please let me know_:
 - Seratonin
 - Roothide / Bootstrap
-- Palera1n (I assume so?)
+- Palera1n
+
+## Known Issues
+The following are issues I hope to address in future versions in the coming months.
+Please keep in mind this is my _first tweak_ and I'm still getting familiar with the process. Things may take time. :)
+- Replies, their "line" indicators, and their own view is currently broken/unmodified.
+- Some text such as "2 Replies" may switch back to the system tint color occasionally on iOS 17.
+- "Notify Anyway" text shown after sending a message to another user in DND mode may revert back to system color when leaving and reopening window.
+- Link Bubbles in Pinned Message Previews sometimes break, displaying a square instead of a bubble.
+- Contact "Info" view on iOS 17 is slightly broken.

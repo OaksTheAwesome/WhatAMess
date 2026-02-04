@@ -45,3 +45,8 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 ## Compatability
 WhatAMess is compatible with devices running a _rootless_ jailbreak on iOS 16. ***Rootful support coming soon!***
 The tweak was also tested on (and has a few specific hooks for) iOS 17, NathanLR, on a 2018 11" iPad Pro. That was the only other "jailbroken" device I had for testing. Technically speaking it should be mostly fine on iOS 17/NathanLR.
+
+Compatability with the following is unknown/uncertain as I don't have the devices to test it. Again, logically speaking, it _should_ as this is simple enough. If the tweak works on any of these, _please let me know_:
+- Seratonin
+- Roothide / Bootstrap
+- iOS 15

@@ -571,8 +571,6 @@ static void logToFile(NSString *message) {
     }
 } */
 
-
-
 /*============
 ==============
     HOOKS 
@@ -5968,4 +5966,3 @@ Also steered me in the direction of what to hook/hide. TYSM. */
 }
 
 %end
-

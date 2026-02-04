@@ -138,7 +138,7 @@
 			<key>label</key>
 			<string>Pinned Conversation Preview Bubbles</string>
 			<key>footerText</key>
-			<string>Changes the bubble and text color of pinned conversations' preview/unread bubbles. If left unchanged, the bubble defaults to the chosen recieved bubble color and text color in the chat view.</string>
+			<string>Changes the bubble and text color of pinned conversation preview/unread bubbles. If left unchanged, the bubble defaults to the chosen recieved bubble color and text color in the chat view.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -168,7 +168,7 @@
 			<key>cell</key>
 			<string>PSEditTextCell</string>
 			<key>label</key>
-			<string>Main Message Title</string>
+			<string>NavBar Title Text</string>
 			<key>key</key>
 			<string>conversationListTitleText</string>
 			<key>defaults</key>
@@ -198,7 +198,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Enable/Disable Items</string>
+			<string>Misc. Enable/Disable Items</string>
 		</dict>
 		<dict>
 			<key>cell</key>

@@ -120,7 +120,7 @@
 			<key>action</key>
 			<string>pickNavBarTintColor</string>
 		</dict>
-				<dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
@@ -147,6 +147,52 @@
 			<string>Choose Cell Tint</string>
 			<key>action</key>
 			<string>pickCellTintColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Links</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Discord: OaksTheAwesome</string>
+			<key>action</key>
+			<string>discordLink</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Twitter</string>
+			<key>action</key>
+			<string>twitterLink</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>YouTube</string>
+			<key>action</key>
+			<string>youTubeLink</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>View this Project on GitHub</string>
+			<key>action</key>
+			<string>gitHubLink</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Version 1.0 | WhatAMess by OaksTheAwesome | 2026</string>
+			<key>footerText</key>
+			<string>Made with ❤️ from the Show Me State</string>
 		</dict>
 	</array>
 	<key>title</key>

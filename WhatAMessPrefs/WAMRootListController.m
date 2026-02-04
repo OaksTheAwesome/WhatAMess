@@ -60,6 +60,26 @@
 	[self presentViewController:alert animated:YES completion:nil];
 }
 
+- (void)discordLink {
+    NSURL *discord = [NSURL URLWithString:@"https://discord.com/users/384917479752990731"];
+    [[UIApplication sharedApplication] openURL:discord options:@{} completionHandler:nil];
+}
+
+- (void)twitterLink {
+    NSURL *twitter = [NSURL URLWithString:@"https://x.com/oakstheawesome"];
+    [[UIApplication sharedApplication] openURL:twitter options:@{} completionHandler:nil];
+}
+
+- (void)youTubeLink {
+    NSURL *youtube = [NSURL URLWithString:@"https://youtube.com/@oakstheawesome"];
+    [[UIApplication sharedApplication] openURL:youtube options:@{} completionHandler:nil];
+}
+
+- (void)gitHubLink {
+    NSURL *github = [NSURL URLWithString:@"https://github.com/OaksTheAwesome/WhatAMess/tree/main"];
+    [[UIApplication sharedApplication] openURL:github options:@{} completionHandler:nil];
+}
+
 /*====================
  COLOR PICKER METHODS
  ===================*/

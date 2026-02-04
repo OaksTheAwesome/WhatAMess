@@ -9,6 +9,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Color Background</string>
+			<key>footerText</key>
+			<string>Again, it's recommended to only use the color or image background. I'm not your dad though so do as you please.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -35,6 +37,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Image Background</string>
+			<key>footerText</key>
+			<string>This slider controls the blur of the image.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -81,6 +85,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Message Bubbles</string>
+			<key>footerText</key>
+			<string>Changes the color of bubbles and their text based on type.</string>
 		</dict>
 		<dict>
    			<key>cell</key>
@@ -122,7 +128,7 @@
     		<key>cell</key>
     		<string>PSButtonCell</string>
     		<key>label</key>
-    		<string>Received Text Color</string>
+    		<string>Received Message Text Color</string>
     		<key>action</key>
     		<string>pickReceivedTextColor</string>
 		</dict>
@@ -138,9 +144,17 @@
     		<key>cell</key>
     		<string>PSButtonCell</string>
     		<key>label</key>
-    		<string>Sent SMS Text Color</string>
+    		<string>Sent SMS Message Text Color</string>
     		<key>action</key>
     		<string>pickSMSSentTextColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>Changes the color of the timestamp text. (ex. "Yesterday at 12:00 PM")</string>
 		</dict>
 		<dict>
     		<key>cell</key>
@@ -168,7 +182,7 @@
     		<key>key</key>
     		<string>isModernMessageBarEnabled</string>
     		<key>label</key>
-    		<string>Modern Message Bar</string>
+    		<string>Enable Modern Message Bar</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -269,6 +283,12 @@
     		</array>
 		</dict>
 		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+		</dict>
+		<dict>
     		<key>cell</key>
     		<string>PSSwitchCell</string>
     		<key>default</key>
@@ -327,6 +347,14 @@
     		<string>pickMessageInputTextColor</string>
 		</dict>
 		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+			<key>footerText</key>
+			<string>Your mileage for these features may vary on iOS 17.</string>
+		</dict>
+		<dict>
     		<key>cell</key>
     		<string>PSSwitchCell</string>
     		<key>default</key>
@@ -350,7 +378,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string> </string>
+			<string>Misc.</string>
 		</dict>
 		<dict>
 			<key>cell</key>

@@ -52,6 +52,7 @@
 @end
 
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
+- (void)applyScreenshotMode;
 @end
 
 @interface CKGradientView : UIView

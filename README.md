@@ -49,4 +49,4 @@ The tweak was also tested on (and has a few specific hooks for) iOS 17, NathanLR
 Compatability with the following is unknown/uncertain as I don't have the devices to test it. Again, logically speaking, it _should_ as this is simple enough. If the tweak works on any of these, _please let me know_:
 - Seratonin
 - Roothide / Bootstrap
-- iOS 15
+- Palera1n (I assume so?)

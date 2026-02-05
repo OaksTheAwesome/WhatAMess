@@ -1,4 +1,4 @@
-![Header Image]
+![Header Image](WhatAMess/WhatAMessPrefs/Resources/WAMHeader.png)
 
 # WhatAMess
 **Make your Messages app as clean (or messy) as you want.**

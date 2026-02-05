@@ -1,7 +1,7 @@
 ![Header Image](WhatAMessPrefs/Resources/WAMHeader.png)
 
 # WhatAMess
-**Make your Messages app as clean (or messy) as you want.**
+**A simple Messages customization tweak for today's jailbreaks.**
 
 _Designed with iOS 16 in mind, tested on NathanLR on iOS 17._
 

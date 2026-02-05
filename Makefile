@@ -1,4 +1,5 @@
 TARGET := iphone:clang:latest:16.0
+FINALPACKAGE = 1
 INSTALL_TARGET_PROCESSES = com.apple.MobileSMS
 
 

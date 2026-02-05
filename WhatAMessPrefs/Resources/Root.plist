@@ -5,6 +5,14 @@
 	<key>items</key>
 	<array>
 		<dict>
+    		<key>cell</key>
+    		<string>WAMBannerCell</string>
+   			<key>height</key>
+    		<integer>200</integer>
+    		<key>cellClass</key>
+    		<string>WAMBannerCell</string>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
@@ -196,6 +204,6 @@
 		</dict>
 	</array>
 	<key>title</key>
-	<string>WhatAMessPrefs</string>
+	<string>WhatAMess</string>
 </dict>
 </plist>

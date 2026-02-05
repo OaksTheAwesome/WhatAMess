@@ -1,3 +1,5 @@
+![Header Image]
+
 # WhatAMess
 **Make your Messages app as clean (or messy) as you want.**
 

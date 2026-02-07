@@ -8,3 +8,6 @@ Maintainer: OaksTheAwesome
 Author: OaksTheAwesome
 Section: Tweaks
 Depends: mobilesubstrate (>= 0.9.5000)
+Filename: ./debs/com.oakstheawesome.whatamess.deb
+Size: 1479692
+MD5sum: b6fe9d0e3cb7b5a110c7e0a30da7b906

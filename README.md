@@ -92,4 +92,4 @@ Email Me: [Email](oaknintendo@gmail.com)
 Check me out on YouTube: [YouTube](https://www.youtube.com/@oakstheawesome)
 
 ## Screenshots
-![Image 1](Github_Screenies/1)
+![Image 1](Github Screenies/1.png)

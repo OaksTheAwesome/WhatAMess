@@ -92,10 +92,6 @@ Email Me: [Email](oaknintendo@gmail.com)
 Check me out on YouTube: [YouTube](https://www.youtube.com/@oakstheawesome)
 
 ## Screenshots
-![Image 1](GHScreenies/1.png)
-![Image 2](GHScreenies/2.png)
-![Image 3](GHScreenies/3.png)
-![Image 4](GHScreenies/4.png)
-![Image 5](GHScreenies/5.png)
-![Image 6](GHScreenies/6.png)
+![Image 1](GHScreenies/1.png) ![Image 2](GHScreenies/2.png) ![Image 3](GHScreenies/3.png)
+![Image 4](GHScreenies/4.png) ![Image 5](GHScreenies/5.png) ![Image 6](GHScreenies/6.png)
 ![Image 7](GHScreenies/7.png)

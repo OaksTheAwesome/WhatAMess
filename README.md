@@ -90,3 +90,6 @@ Twitter: [OaksTheAwesome](https://x.com/OaksTheAwesome)
 Email Me: [Email](oaknintendo@gmail.com)
 
 Check me out on YouTube: [YouTube](https://www.youtube.com/@oakstheawesome)
+
+## Screenshots
+![Image 1](Github_Screenies/1)

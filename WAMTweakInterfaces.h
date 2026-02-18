@@ -1,8 +1,9 @@
-
 @interface CKConversationListCollectionViewController : UICollectionViewController
 -(void)updateBackground;
 -(void)makeSubviewsTransparent:(UIView *)view;
-- (void)applyCustomColorsToCKLabelsInView:(UIView *)view;
+-(void)applyCustomColorsToCKLabelsInView:(UIView *)view;
+-(void)handlePrefsChanged;
+-(void)updateAllColors;
 @end
 
 @interface CKTranscriptCollectionViewController : UIViewController
@@ -12,13 +13,17 @@
 @end
 
 @interface CKMessagesController : UIViewController
+-(void)updateChatBackground;
+-(void)handlePrefsChanged;
+- (NSArray *)getAllSubviews:(UIView *)view;
+-(void)forceRedrawCell:(UIView *)view;
 @end
 
 @interface _UIBarBackground : UIView
-- (void)createOurBlur;
-- (void)removeSystemViews;
-- (void)ensureBlurExists;
-- (BOOL)findContactViewInWindow:(UIView *)view;
+-(void)createOurBlur;
+-(void)removeSystemViews;
+-(void)ensureBlurExists;
+-(BOOL)findContactViewInWindow:(UIView *)view;
 @end
 
 @interface _UICollectionViewListSeparatorView : UIView
@@ -28,6 +33,7 @@
 @end
 
 @interface CKPinnedConversationView : UIView
+-(void)applyPinnedGlow;
 @end
 
 @class CKConversationListCollectionViewController;
@@ -39,7 +45,7 @@
 @end
 
 @interface UIView (Private)
-- (UIViewController *)_viewControllerForAncestor;
+-(UIViewController *)_viewControllerForAncestor;
 @end
 
 @interface CKLabel : UILabel
@@ -52,14 +58,14 @@
 @end
 
 @interface CKConversationListCollectionViewConversationCell : UICollectionViewCell
-- (void)applyScreenshotMode;
+-(void)applyScreenshotMode;
 @end
 
 @interface CKGradientView : UIView
-- (void)setColors:(NSArray *)colors;
-- (NSArray *)colors;
-- (BOOL)isInsideReactionBubble;
-- (void)applyColorRecursively:(UIColor *)color;
+-(void)setColors:(NSArray *)colors;
+-(NSArray *)colors;
+-(BOOL)isInsideReactionBubble;
+-(void)applyColorRecursively:(UIColor *)color;
 @end
 
 @interface CKBalloonImageView : UIImageView
@@ -71,8 +77,8 @@
 @end
 
 @interface CKBalloonTextView : UITextView
-- (void)updateTextColorForBalloon;
-- (UIColor *)getCustomTextColor;
+-(void)updateTextColorForBalloon;
+-(UIColor *)getCustomTextColor;
 @end
 
 @interface CKTranscriptStatusCell : UICollectionViewCell
@@ -88,53 +94,61 @@
 @end
 
 @interface CKMessageEntryView : UIView
-- (void)applyInputFieldCustomization;
-- (UITextView *)findTextView:(UIView *)view;
-- (UIView *)findRoundedView:(UIView *)view;
-- (UIView *)findViewByClassName:(UIView *)view;
+-(void)applyInputFieldCustomization;
+-(UITextView *)findTextView:(UIView *)view;
+-(UIView *)findRoundedView:(UIView *)view;
+-(UIView *)findViewByClassName:(UIView *)view;
 @end
 
 @interface UIKBVisualEffectView : UIVisualEffectView
 @end
 
 @interface CKMessageEntryRichTextView : UITextView
+- (void)handlePrefsChanged;
 @end
 
 @interface CKEntryViewButton : UIView
+-(void)handleButtonPrefsChanged;
 @end
 
 @interface CKDetailsTableView : UITableView
+-(void)updateDetailsBackground;
 @end
 
 @interface _UITableViewHeaderFooterContentView : UIView
 @end
 
 @interface CNGroupIdentityHeaderContainerView : UIView
-- (void)applyContactNameColor;
+-(void)applyContactNameColor;
 @end
 
 @interface CKGroupPhotoCell : UIView
 @end
 
 @interface CNActionView : UIView
-- (void)matchIconToLabelAlpha;
-- (void)updateIconOpacity;
+-(void)matchIconToLabelAlpha;
+-(void)updateIconOpacity;
+-(void)applyActionViewBlur;
 @end
 
 @interface CKTranscriptDetailsResizableCell : UICollectionViewCell
+-(void)applyBlurStyle;
 @end
 
 @interface CKDetailsSharedWithYouCell : UITableViewCell
+-(void)applyBlurStyle;
 @end
 
 @interface CKDetailsChatOptionsCell : UITableViewCell
+-(void)applyBlurStyle;
 @end
 
 @interface CKBackgroundDecorationView : UICollectionReusableView
+-(void)applyBlurStyle;
 @end
 
 @interface CKRecipientSelectionView : UIView
-- (void)updateRecipientBackground;
+-(void)updateRecipientBackground;
 @end
 
 @interface CKComposeRecipientView : UIView
@@ -150,42 +164,46 @@
 @end
 
 @interface _UIPlatterClippingView : UIView
+-(void)applyPlatterBackground;
 @end
 
 @interface _UISystemBackgroundView : UIView
 @end
 
 @interface CKTranscriptReportSpamCell : UIView
-- (void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color;
+-(void)colorReportJunkButton:(UIView *)view withColor:(UIColor *)color;
 @end
 
 @interface CKThumbsUpAcknowledgmentGlyphView : UIView
 @end
 
 @interface CKAggregateAcknowledgementBalloonView : UIView
-- (void)applyGlyphTintRecursively:(UIView *)view;
+-(void)applyGlyphTintRecursively:(UIView *)view;
 @end
 
 @interface CKAcknowledgmentGlyphImageView : UIView
 @property (nonatomic, strong) UIColor *tintColor;
-- (void)setImage:(UIImage *)image;
+-(void)setImage:(UIImage *)image;
 @end
 
 @interface CKTranscriptUnavailabilityIndicatorCell : UICollectionViewCell
-- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
-- (void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
+-(void)applyColorToUnavailabilityIndicator:(UIView *)view withColor:(UIColor *)color;
 @end
 
 @interface CKSendMenuPresentationPopoverBackdropView : UIView
+-(UIColor *)adjustedTintColor:(UIColor *)customTint;
+-(void)applyMenuBackdropColor;
 @end
 
 @interface CKSearchCollectionView : UICollectionView
+-(void)applySearchBackground;
 @end
 
 @interface UINavigationButton : UIView
 @end
 
 @interface _UINavigationBarLargeTitleView : UIView
+-(void)applyLargeTitleStyle;
 @end
 
 @interface UIViewControllerWrapperView : UIView
@@ -201,24 +219,28 @@
 @end
 
 @interface LPTextView : UIView
+-(void)applyLinkTextColors;
 @end
 
 @interface LPImageView : UIView
 @end
 
 @interface CKDetailsSearchResultsTitleHeaderCell : UIView
+-(void)applyHeaderStyle;
 @end
 
 @interface CKSearchResultsTitleHeaderCell : UIView
+-(void)applyHeaderStyle;
 @end
 
 @interface CKAvatarTitleCollectionReusableView : UIView
 @end
 
-@interface CKMessageAcknowledgmentPickerBarView: UIView
+@interface CKMessageAcknowledgmentPickerBarView : UIView
 @end
 
 @interface CKPinnedConversationSummaryBubble : UIView
+-(void)applyPinnedBubbleStyle;
 @end
 
 @interface CNContactView : UIView
@@ -240,11 +262,22 @@
 @end
 
 @interface CKPinnedConversationTypingBubble : UIView
+-(void)applyTypingBubbleColors;
 @end
 
 @interface CKConversationListTypingIndicatorView : UIView
+-(void)applyTypingIndicatorColors;
 @end
 
 @interface CKTypingView : UIView
-- (void)applyTypingIndicatorColors;
+-(void)applyTypingIndicatorColors;
+@end
+
+// Category declarations for system classes with added methods
+@interface UISearchTextField (WAMTweakAdditions)
+-(void)applySearchFieldTint;
+@end
+
+@interface UITableViewCell (WAMTweakAdditions)
+-(void)applyContactCellBlur;
 @end

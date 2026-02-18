@@ -7,6 +7,7 @@ BUNDLE_NAME = WhatAMessPrefs
 WhatAMessPrefs_FILES = WAMRootListController.m \
 					WAMConvListController.m \
 					WAMChatViewController.m \
+					WAMBaseListController.m \
 					WAMBannerCell.m
 
 WhatAMessPrefs_FRAMEWORKS = UIKit

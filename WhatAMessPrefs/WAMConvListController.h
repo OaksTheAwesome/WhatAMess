@@ -1,5 +1,4 @@
-#import <Preferences/PSListController.h>
-#import <UIKit/UIKit.h>
+#import "WAMBaseListController.h"
 
-@interface WAMConvListController : PSListController <UINavigationControllerDelegate, UIImagePickerControllerDelegate, UIColorPickerViewControllerDelegate>
+@interface WAMConvListController : WAMBaseListController
 @end

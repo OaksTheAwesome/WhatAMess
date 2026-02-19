@@ -86,271 +86,41 @@
 			<key>label</key>
 			<string>Message Bubbles</string>
 			<key>footerText</key>
-			<string>Changes the color of bubbles and their text based on type.</string>
-		</dict>
-		<dict>
-   			<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isCustomBubbleColorsEnabled</string>
-    		<key>label</key>
-    		<string>Custom Bubble Colors</string>
+			<string>Settings to customize the message bubbles in chats.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSButtonCell</string>
+			<string>PSLinkCell</string>
 			<key>label</key>
-			<string>Recieved Messages</string>
-			<key>action</key>
-			<string>pickReceivedBubbleColor</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>Sent iMessages</string>
-			<key>action</key>
-			<string>pickSentBubbleColor</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>Sent SMS Messages</string>
-			<key>action</key>
-			<string>pickSMSSentBubbleColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Received Message Text Color</string>
-    		<key>action</key>
-    		<string>pickReceivedTextColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Sent iMessage Text Color</string>
-    		<key>action</key>
-    		<string>pickSentTextColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Sent SMS Message Text Color</string>
-    		<key>action</key>
-    		<string>pickSMSSentTextColor</string>
+			<string>Chat Bubble Settings</string>
+			<key>detail</key>
+			<string>WAMChatBubbleController</string>
+			<key>isController</key>
+			<true/>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string> </string>
+			<string>Message Bar</string>
 			<key>footerText</key>
-			<string>Changes the color of the timestamp text. (ex. "Yesterday at 12:00 PM")</string>
+			<string>Setings to customize the message bar.</string>
 		</dict>
 		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Timestamp Colors</string>
-    		<key>action</key>
-    		<string>pickTimestampTextColor</string>
+			<key>cell</key>
+			<string>PSLinkCell</string>
+			<key>label</key>
+			<string>Message Bar Settings</string>
+			<key>detail</key>
+			<string>WAMMessageBarController</string>
+			<key>isController</key>
+			<true/>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Modern Message Bar</string>
-			<key>footerText</key>
-			<string>Enables a redesigned view behind the message bar, providing a gradient that blurs content closer to the bottom of the screen. Similar to the Modern NavBar. </string>
-		</dict>
-		<dict>
-  			<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<true/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isModernMessageBarEnabled</string>
-    		<key>label</key>
-    		<string>Enable Modern Message Bar</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>Message Bar Customization</string>
-			<key>footerText</key>
-			<string>Tints the message bar's default blur. Similar to the modern NavBar, only works if modern Message Bar is disabled.</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
-			<string>isMessageBarCustomizationEnabled</string>
-			<key>label</key>
-			<string>Message Bar Customization</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>Message Bar Tint Color</string>
-			<key>action</key>
-			<string>pickMessageBarTintColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSGroupCell</string>
-    		<key>label</key>
-    		<string>Message Input Field</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isInputFieldCustomizationEnabled</string>
-    		<key>label</key>
-    		<string>Input Field Customization</string>
-    		<key>PostNotification</key>
-    		<string>com.oakstheawesome.whatamessprefs/ReloadPrefs</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Input Field Background Color</string>
-    		<key>action</key>
-    		<string>pickInputFieldBackgroundColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isInputFieldBlurEnabled</string>
-    		<key>label</key>
-    		<string>Enable Blur Background</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSLinkListCell</string>
-    		<key>default</key>
-    		<string>regular</string>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>detail</key>
-    		<string>PSListItemsController</string>
-    		<key>key</key>
-    		<string>inputFieldBlurStyle</string>
-    		<key>label</key>
-   		    <string>Blur Style</string>
-    		<key>validValues</key>
-    		<array>
-       		<string>regular</string>
-        		<string>light</string>
-        		<string>dark</string>
-        		<string>ultraThinLight</string>
-        		<string>ultraThinDark</string>
-    		</array>
-    		<key>validTitles</key>
-    		<array>
-        		<string>Regular</string>
-        		<string>Light</string>
-        		<string>Dark</string>
-        		<string>Ultra Thin Light</string>
-        		<string>Ultra Thin Dark</string>
-    		</array>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isPlaceholderCustomizationEnabled</string>
-    		<key>label</key>
-    		<string>Customize Placeholder Text</string>
-    		<key>PostNotification</key>
-    		<string>com.oakstheawesome.whatamessprefs/ReloadPrefs</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Placeholder Text Color</string>
-    		<key>action</key>
-    		<string>pickPlaceholderTextColor</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSEditTextCell</string>
-    		<key>default</key>
-    		<string></string>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>placeholderText</string>
-    		<key>label</key>
-    		<string>Placeholder Text</string>
-    		<key>placeholder</key>
-    		<string>iMessage</string>
-    		<key>PostNotification</key>
-    		<string>com.oakstheawesome.whatamessprefs/ReloadPrefs</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isMessageInputTextEnabled</string>
-    		<key>label</key>
-    		<string>Enable Input Text Customization</string>
-		</dict>
-		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Input Text Color</string>
-    		<key>action</key>
-    		<string>pickMessageInputTextColor</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string> </string>
+			<string>Camera/App Drawer Buttons</string>
 			<key>footerText</key>
 			<string>Your mileage for these features may vary on iOS 17.</string>
 		</dict>
@@ -379,6 +149,8 @@
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Misc.</string>
+			<key>footerText</key>
+			<string>Customize the color and text color of message link bubbles.</string>
 		</dict>
 		<dict>
 			<key>cell</key>

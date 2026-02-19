@@ -18,10 +18,6 @@
     [self showColorPickerForKey:@"systemTintColor" defaultColor:[UIColor systemBlueColor]];
 }
 
-- (void)pickNavBarTintColor {
-    [self showColorPickerForKey:@"navBarTintColor" defaultColor:[UIColor systemBlueColor]];
-}
-
 - (void)pickCellTintColor {
     [self showColorPickerForKey:@"cellTintColor" defaultColor:[UIColor systemBlueColor]];
 }

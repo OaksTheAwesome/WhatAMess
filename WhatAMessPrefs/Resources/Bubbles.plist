@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>items</key>
+	<array>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Enable/Disable</string>
+		</dict>
+		<dict>
+   			<key>cell</key>
+    		<string>PSSwitchCell</string>
+    		<key>default</key>
+    		<false/>
+    		<key>defaults</key>
+    		<string>com.oakstheawesome.whatamessprefs</string>
+    		<key>key</key>
+    		<string>isCustomBubbleColorsEnabled</string>
+    		<key>label</key>
+    		<string>Custom Bubble Colors</string>
+		</dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Bubble Colors</string>
+            <key>footerText</key>
+            <string>Changes the color of bubbles based on type.</string>
+        </dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Recieved Messages</string>
+			<key>action</key>
+			<string>pickReceivedBubbleColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Sent iMessages</string>
+			<key>action</key>
+			<string>pickSentBubbleColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Sent SMS Messages</string>
+			<key>action</key>
+			<string>pickSMSSentBubbleColor</string>
+		</dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Bubble Text Colors</string>
+            <key>footerText</key>
+			<string>Changes the color of bubbles text based on type.</string>
+        </dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Received Message Text Color</string>
+    		<key>action</key>
+    		<string>pickReceivedTextColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Sent iMessage Text Color</string>
+    		<key>action</key>
+    		<string>pickSentTextColor</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Sent SMS Message Text Color</string>
+    		<key>action</key>
+    		<string>pickSMSSentTextColor</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Misc.</string>
+			<key>footerText</key>
+			<string>Changes the color of the timestamp text. (ex. "Yesterday at 12:00 PM")</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Timestamp Colors</string>
+    		<key>action</key>
+    		<string>pickTimestampTextColor</string>
+		</dict>
+    </array>
+	<key>title</key>
+	<string>Chat Bubble Settings</string>
+</dict>
+</plist>

@@ -8,6 +8,9 @@ WhatAMessPrefs_FILES = WAMRootListController.m \
 					WAMConvListController.m \
 					WAMChatViewController.m \
 					WAMBaseListController.m \
+					WAMNavBarController.m \
+					WAMMessageBarController.m \
+					WAMChatBubbleController.m \
 					WAMBannerCell.m
 
 WhatAMessPrefs_FRAMEWORKS = UIKit

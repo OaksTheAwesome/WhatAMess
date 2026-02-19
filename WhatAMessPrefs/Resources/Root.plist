@@ -84,50 +84,18 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Modern NavBar</string>
-			<key>footerText</key>
-			<string>This enables a custom, blur-based navigation bar across the entire Messages app. Inspired by Messages in iOS 26.</string>
+			<string>Navigation Bar</string>
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
+			<string>PSLinkCell</string>
+			<key>label</key>
+			<string>NavBar Settings</string>
+			<key>detail</key>
+			<string>WAMNavBarController</string>
+			<key>isController</key>
 			<true/>
-			<key>label</key>
-			<string>Enable Modern NavBar</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
-			<string>isModernNavBarEnabled</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>Stock NavBar Settings</string>
-			<key>footerText</key>
-			<string>Colorizes the stock navigation bar. Only works if Modern NavBar is disabled.</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>Enable NavBar Customization</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
-			<string>isNavBarCustomizationEnabled</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>Choose NavBar Tint</string>
-			<key>action</key>
-			<string>pickNavBarTintColor</string>
-		</dict>
+		</dict> 
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>

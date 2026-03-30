@@ -218,7 +218,6 @@ CGFloat getImageBlurAmount() {
     return prefs[key] ? [prefs[key] floatValue] : 0.0;
 }
 
-
 CGFloat getChatImageBlurAmount() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"chatImageBlurAmountDark" : @"chatImageBlurAmount";
@@ -2747,6 +2746,12 @@ static NSInteger const kArrowOverlayTag = 99881;
         object:nil];
 }
 
+- (void)didMoveToSuperview {
+    %orig;
+    if (!isTweakEnabled() || !self.superview) return;
+    [self updateDetailsBackground];
+}
+
 %new
 - (void)handleDetailsPrefsChanged {
     refreshPrefs();
@@ -2755,6 +2760,13 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 %new
 - (void)updateDetailsBackground {
+    if (isiOS17OrHigher()) {
+        // Let UIViewControllerWrapperView handle the background on iOS 17
+        self.backgroundView = nil;
+        self.backgroundColor = [UIColor clearColor];
+        return;
+    }
+
     UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
@@ -2786,7 +2798,6 @@ static NSInteger const kArrowOverlayTag = 99881;
         }
     }
 }
-
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -3547,7 +3558,7 @@ static NSInteger const kArrowOverlayTag = 99881;
         [self insertSubview:imageView atIndex:0];
         self.backgroundColor = [UIColor clearColor];
     } else {
-        self.backgroundColor = [UIColor clearColor];
+        self.backgroundColor = [UIColor systemBackgroundColor];
     }
 
     [self setNeedsLayout];
@@ -3592,11 +3603,16 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    self.backgroundColor = [UIColor clearColor];
+    if (isChatColorBgEnabled() || isChatImageBgEnabled()) {
+        self.backgroundColor = [UIColor clearColor];
+    }
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (!isTweakEnabled()) { %orig; return; }
+    if (!isTweakEnabled() || (!isChatColorBgEnabled() && !isChatImageBgEnabled())) { 
+        %orig; 
+        return; 
+    }
     %orig([UIColor clearColor]);
 }
 
@@ -4084,7 +4100,7 @@ static NSInteger const kArrowOverlayTag = 99881;
             }
         }
     }
-    
+
     self.tintColor = glyphTint;
     for (UIView *subview in self.subviews) subview.tintColor = glyphTint;
 }
@@ -4706,6 +4722,7 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)didMoveToSuperview {
     %orig;
     if (!isTweakEnabled()) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return; // ← add this
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 5) {
@@ -5194,6 +5211,8 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 /* iOS 17 Specific Hooks */
 
+#define kWrapperBackgroundImageTag 0x57414D54
+
 %hook CKSendMenuPresentationPopoverBackdropView
 
 - (void)didMoveToWindow {
@@ -5309,45 +5328,12 @@ static NSInteger const kArrowOverlayTag = 99881;
     }
     if (!isNoConversationView) return;
 
-    UIView *contentView = nil;
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIView class]] && ![subview isKindOfClass:[UIImageView class]]) {
-            contentView = subview;
-            break;
-        }
-    }
-    if (!contentView) return;
-
-    for (UIView *subview in [contentView.subviews copy]) {
-        if ([subview isKindOfClass:[UIImageView class]]) {
-            UIImageView *imgView = (UIImageView *)subview;
-            if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) [imgView removeFromSuperview];
-        }
-    }
-
-    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
-
-    if (isChatColorBgEnabled()) {
-        contentView.backgroundColor = getChatBackgroundColor();
-    } else if (chatBgImage && isChatImageBgEnabled()) {
-        CGFloat blurAmount = getChatImageBlurAmount();
-        if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
-
-        UIImageView *imageView = [[UIImageView alloc] initWithFrame:contentView.bounds];
-        imageView.image = chatBgImage;
-        imageView.contentMode = UIViewContentModeScaleAspectFill;
-        imageView.clipsToBounds = YES;
-        imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [contentView insertSubview:imageView atIndex:0];
-        contentView.backgroundColor = [UIColor clearColor];
-    } else {
-        contentView.backgroundColor = [UIColor clearColor];
-    }
+    [self applyWrapperBackground];
 }
 
-- (void)layoutSubviews {
+- (void)didMoveToSuperview {
     %orig;
-    if (!isTweakEnabled() || isiOS17OrHigher()) return;
+    if (!isTweakEnabled() || !isiOS17OrHigher() || !self.superview) return;
 
     UIView *parent = self.superview;
     BOOL isNoConversationView = NO;
@@ -5364,15 +5350,110 @@ static NSInteger const kArrowOverlayTag = 99881;
     }
     if (!isNoConversationView) return;
 
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIView class]]) {
-            for (UIView *bgView in subview.subviews) {
-                if ([bgView isKindOfClass:[UIImageView class]]) {
-                    UIImageView *imgView = (UIImageView *)bgView;
-                    if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0) imgView.frame = subview.bounds;
+    // Dispatch to end of runloop so the transition is fully settled before applying
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf applyWrapperBackground];
+    });
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+
+    if (isiOS17OrHigher()) {
+        // Only do a silent frame update — never add/remove/reorder views here
+        UIView *contentView = nil;
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIView class]] && ![subview isKindOfClass:[UIImageView class]]) {
+                contentView = subview;
+                break;
+            }
+        }
+        if (!contentView) return;
+
+        UIView *bgHost = [contentView isKindOfClass:[UIScrollView class]] ? self : contentView;
+        UIImageView *existingImageView = (UIImageView *)[bgHost viewWithTag:kWrapperBackgroundImageTag];
+        if (existingImageView) existingImageView.frame = bgHost.bounds;
+        return;
+    }
+
+    // iOS 16: just update image frame
+    {
+        UIView *parent = self.superview;
+        BOOL isNoConversationView = NO;
+        int levels = 0;
+        while (parent && levels < 10) {
+            NSString *className = NSStringFromClass([parent class]);
+            if ([className containsString:@"UINavigationTransitionView"] ||
+                [className containsString:@"UILayoutContainerView"] ||
+                [className containsString:@"UIPanelControllerContentView"]) {
+                isNoConversationView = YES;
+            }
+            parent = parent.superview;
+            levels++;
+        }
+        if (!isNoConversationView) return;
+
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIView class]]) {
+                for (UIView *bgView in subview.subviews) {
+                    if ([bgView isKindOfClass:[UIImageView class]]) {
+                        UIImageView *imgView = (UIImageView *)bgView;
+                        if (imgView.frame.origin.x == 0 && imgView.frame.origin.y == 0)
+                            imgView.frame = subview.bounds;
+                    }
                 }
             }
         }
+    }
+}
+
+%new
+- (void)applyWrapperBackground {
+    UIView *contentView = nil;
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIView class]] && ![subview isKindOfClass:[UIImageView class]]) {
+            contentView = subview;
+            break;
+        }
+    }
+    if (!contentView) return;
+
+    UIView *bgHost = [contentView isKindOfClass:[UIScrollView class]] ? self : contentView;
+
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
+    UIImageView *existingImageView = (UIImageView *)[bgHost viewWithTag:kWrapperBackgroundImageTag];
+
+    if (isChatColorBgEnabled()) {
+        if (existingImageView) [existingImageView removeFromSuperview];
+        bgHost.backgroundColor = getChatBackgroundColor();
+        contentView.backgroundColor = [UIColor clearColor];
+
+    } else if (chatBgImage && isChatImageBgEnabled()) {
+        CGFloat blurAmount = getChatImageBlurAmount();
+        if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
+
+        if (existingImageView) {
+            existingImageView.frame = bgHost.bounds;
+            existingImageView.image = chatBgImage;
+        } else {
+            UIImageView *imageView = [[UIImageView alloc] initWithFrame:bgHost.bounds];
+            imageView.tag = kWrapperBackgroundImageTag;
+            imageView.image = chatBgImage;
+            imageView.contentMode = UIViewContentModeScaleAspectFill;
+            imageView.clipsToBounds = YES;
+            imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            imageView.userInteractionEnabled = NO;
+            [bgHost insertSubview:imageView atIndex:0];
+        }
+        contentView.backgroundColor = [UIColor clearColor];
+        bgHost.backgroundColor = [UIColor clearColor];
+
+    } else {
+        if (existingImageView) [existingImageView removeFromSuperview];
+        bgHost.backgroundColor = [UIColor systemBackgroundColor];
+        contentView.backgroundColor = [UIColor systemBackgroundColor];
     }
 }
 

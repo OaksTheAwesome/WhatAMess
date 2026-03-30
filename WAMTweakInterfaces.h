@@ -209,6 +209,7 @@
 @end
 
 @interface UIViewControllerWrapperView : UIView
+- (void)applyWrapperBackground;
 @end
 
 @interface CKTranscriptNotifyAnywayButtonCell : UICollectionViewCell

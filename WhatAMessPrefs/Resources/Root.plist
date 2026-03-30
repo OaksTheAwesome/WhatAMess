@@ -44,15 +44,45 @@
 			<key>label</key>
 			<string>Tint Color</string>
 			<key>footerText</key>
-			<string>Controls the tint color app wide.</string>
+			<string>Controls the tint color app wide, with the option to manually override some individual tinted elements.</string>
 		</dict>
 		<dict>
     		<key>cell</key>
     		<string>PSButtonCell</string>
     		<key>label</key>
-    		<string>System Tint Color</string>
+    		<string>Light Mode System Tint</string>
     		<key>action</key>
-    		<string>pickSystemTintColor</string>
+    		<string>pickSystemTintColorLight</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Dark Mode System Tint</string>
+    		<key>action</key>
+    		<string>pickSystemTintColorDark</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSSwitchCell</string>
+    		<key>default</key>
+    		<false/>
+    		<key>label</key>
+    		<string>Override Tint Colors</string>
+    		<key>defaults</key>
+    		<string>com.oakstheawesome.whatamessprefs</string>
+    		<key>key</key>
+    		<string>isAdvancedTintEnabled</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSLinkCell</string>
+    		<key>label</key>
+    		<string>Override Tint Settings</string>
+    		<key>detail</key>
+    		<string>WAMAdvancedTintController</string>
+    		<key>isController</key>
+    		<true/>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -95,7 +125,7 @@
 			<string>WAMNavBarController</string>
 			<key>isController</key>
 			<true/>
-		</dict> 
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -105,24 +135,68 @@
 			<string>Colorizes the cells app-wide.</string>
 		</dict>
 		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>Enable Cell Coloring</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
-			<string>isCellBlurTintEnabled</string>
+    		<key>cell</key>
+    		<string>PSSwitchCell</string>
+    		<key>default</key>
+    		<false/>
+    		<key>label</key>
+    		<string>Enable Cell Coloring</string>
+    		<key>lightModeKey</key>
+    		<string>isCellBlurTintEnabled</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Choose Cell Tint</string>
+			<string>Light Mode Cell Tint</string>
 			<key>action</key>
-			<string>pickCellTintColor</string>
+			<string>pickCellTintColorLight</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Dark Mode Cell Tint</string>
+			<key>action</key>
+			<string>pickCellTintColorDark</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSGroupCell</string>
+    		<key>label</key>
+    		<string>Presets</string>
+    		<key>footerText</key>
+    		<string>Export your current setup as a .wampreset preset file, or import an existing one.</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Export Preset</string>
+    		<key>action</key>
+    		<string>exportPreset</string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Import Preset</string>
+    		<key>action</key>
+    		<string>importPreset</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string> </string>
+		</dict>
+		<dict>
+    		<key>cell</key>
+    		<string>PSButtonCell</string>
+    		<key>label</key>
+    		<string>Reset Preferences</string>
+    		<key>action</key>
+    		<string>resetPreferences</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -166,7 +240,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Version 1.0 | WhatAMess by OaksTheAwesome | 2026</string>
+			<string>Version 1.1 | WhatAMess by OaksTheAwesome | 2026</string>
 			<key>footerText</key>
 			<string>Made with ❤️ from the Show Me State</string>
 		</dict>

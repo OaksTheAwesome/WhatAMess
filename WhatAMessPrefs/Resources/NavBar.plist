@@ -4,7 +4,35 @@
 <dict>
 	<key>items</key>
 	<array>
-        <dict>
+		<dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Light/Dark Mode Editing Selection</string>
+            <key>footerText</key>
+            <string>Select which mode's colors to edit. Dark and light selections are stored using the same option.</string>
+        </dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>key</key>
+			<string>editingDarkMode</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>label</key>
+			<string>Editing Mode</string>
+			<key>validTitles</key>
+			<array>
+				<string>Light</string>
+				<string>Dark</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<false/>
+				<true/>
+			</array>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
@@ -19,9 +47,7 @@
 			<true/>
 			<key>label</key>
 			<string>Enable Modern NavBar</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isModernNavBarEnabled</string>
 		</dict>
 		<dict>
@@ -39,9 +65,7 @@
 			<false/>
 			<key>label</key>
 			<string>Enable NavBar Customization</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isNavBarCustomizationEnabled</string>
 		</dict>
 		<dict>
@@ -52,7 +76,7 @@
 			<key>action</key>
 			<string>pickNavBarTintColor</string>
 		</dict>
-    </array>
+	</array>
 	<key>title</key>
 	<string>NavBar Settings</string>
 </dict>

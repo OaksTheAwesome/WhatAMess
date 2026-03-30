@@ -5,22 +5,48 @@
 	<key>items</key>
 	<array>
 		<dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Light/Dark Mode Editing Selection</string>
+            <key>footerText</key>
+            <string>Select which mode's colors to edit. Dark and light selections are stored using the same option.</string>
+        </dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>key</key>
+			<string>editingDarkMode</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>label</key>
+			<string>Editing Mode</string>
+			<key>validTitles</key>
+			<array>
+				<string>Light</string>
+				<string>Dark</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<false/>
+				<true/>
+			</array>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>Color Background</string>
 			<key>footerText</key>
-			<string>It's recommended to only use EITHER the color background or the image background. Having both toggled on at once may be visually unappealing. (Not to mention slightly more intensive.)</string>
+			<string>It's recommended to only use EITHER the color background or the image background. Having both toggled on at once may be visually unappealing.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>label</key>
 			<string>Enable Color Background</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isConvColorBgEnabled</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -53,10 +79,8 @@
 			<string>PSSwitchCell</string>
 			<key>label</key>
 			<string>Enable Image Background</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isConvImageBgEnabled</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -73,10 +97,8 @@
 			<string>PSSliderCell</string>
 			<key>label</key>
 			<string>Image Blur Amount</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>imageBlurAmount</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<real>0</real>
 			<key>min</key>
@@ -94,17 +116,15 @@
 			<key>label</key>
 			<string>Text Colors</string>
 			<key>footerText</key>
-			<string>Title color affects both pinned and conversation list titles. Date/Time color also affects chevrons. </string>
+			<string>Title color affects both pinned and conversation list titles. Date/Time color also affects chevrons.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>label</key>
 			<string>Enable Custom Text Colors</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isCustomTextColorsEnabled</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -138,7 +158,7 @@
 			<key>label</key>
 			<string>Pinned Conversation Preview Bubbles</string>
 			<key>footerText</key>
-			<string>Changes the bubble and text color of pinned conversation preview/unread bubbles. If left unchanged, the bubble defaults to the chosen recieved bubble color and text color in the chat view.</string>
+			<string>Changes the bubble and text color of pinned conversation preview/unread bubbles. If left unchanged, the bubble defaults to the chosen received bubble color and text color in the chat view.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -169,10 +189,8 @@
 			<string>PSEditTextCell</string>
 			<key>label</key>
 			<string>NavBar Title Text</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>conversationListTitleText</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<string>Messages</string>
 			<key>placeholder</key>

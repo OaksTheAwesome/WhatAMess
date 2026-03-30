@@ -24,6 +24,7 @@
 -(void)removeSystemViews;
 -(void)ensureBlurExists;
 -(BOOL)findContactViewInWindow:(UIView *)view;
+- (BOOL)isBottomBar;
 @end
 
 @interface _UICollectionViewListSeparatorView : UIView
@@ -129,6 +130,7 @@
 -(void)matchIconToLabelAlpha;
 -(void)updateIconOpacity;
 -(void)applyActionViewBlur;
+- (void)applyActionColor:(UIColor *)color toView:(UIView *)view ;
 @end
 
 @interface CKTranscriptDetailsResizableCell : UICollectionViewCell
@@ -244,6 +246,8 @@
 @end
 
 @interface CNContactView : UIView
+- (void)applyAdvancedTintToContactLabels;
+- (void)walkViewForTintLabels:(UIView *)view color:(UIColor *)color;
 @end
 
 @interface UITableViewWrapperView : UIView
@@ -259,6 +263,8 @@
 @end
 
 @interface CKCanvasBackButtonView : UIView
+- (void)applyCanvasBackButtonStyle;
+- (void)applyNavColor:(UIColor *)color textColor:(UIColor *)textColor toView:(UIView *)view;
 @end
 
 @interface CKPinnedConversationTypingBubble : UIView
@@ -280,4 +286,10 @@
 
 @interface UITableViewCell (WAMTweakAdditions)
 -(void)applyContactCellBlur;
+@end
+
+@interface CKNavigationBarCanvasView : UIView
+@end
+
+@interface CKPhotosSearchResultsModeHeaderReusableView : UIView
 @end

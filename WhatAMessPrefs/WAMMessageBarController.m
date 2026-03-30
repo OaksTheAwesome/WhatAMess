@@ -29,4 +29,12 @@
     [self showColorPickerForKey:@"messageBarTintColor" defaultColor:[UIColor systemBlueColor]];
 }
 
+- (void)pickMessageBarArrowColor {
+    [self showColorPickerForKey:@"sendButtonArrowColor" defaultColor:[UIColor whiteColor]];
+}
+
+- (void)pickSendButtonColor {
+    [self showColorPickerForKey:@"sendButtonColor" defaultColor:[UIColor systemBlueColor]];
+}
+
 @end

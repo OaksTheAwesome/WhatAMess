@@ -32,7 +32,10 @@
 #pragma mark - Image Picker
 
 - (void)pickChatBgImage {
-    [self showImagePickerForDestinationPath:@"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"];
+    NSString *path = [self isEditingDarkMode]
+        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
+        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg";
+    [self showImagePickerForDestinationPath:path];
 }
 
 @end

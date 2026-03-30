@@ -40,37 +40,85 @@
 
 #pragma mark - PSListController Override
 
-// Route ALL PSListController saves (toggles, sliders, text fields, etc.)
-// through our unified plist file instead of cfprefsd.
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
-    NSString *key = specifier.properties[@"key"];
+    NSSet *globalKeys = [NSSet setWithArray:@[
+        @"isCellBlurTintEnabled",
+        @"isAdvancedTintEnabled"
+    ]];
+
+    NSString *lightKey = specifier.properties[@"lightModeKey"];
+    NSString *key;
+
+    if (lightKey && [globalKeys containsObject:lightKey]) {
+        key = lightKey; // always use base key, never append Dark
+    } else if (lightKey) {
+        key = [self keyForBase:lightKey];
+    } else {
+        key = specifier.properties[@"key"];
+    }
+
     if (key) {
         [self saveValue:value forKey:key];
     } else {
-        // No key — fall back to default behaviour (shouldn't normally happen)
         [super setPreferenceValue:value specifier:specifier];
     }
     [self postNotification];
+
+    if ([key isEqualToString:@"editingDarkMode"]) {
+        _specifiers = nil;
+        [self reloadSpecifiers];
+    }
 }
 
-// Read values back from our plist so the UI reflects saved state correctly.
 - (id)readPreferenceValue:(PSSpecifier *)specifier {
-    NSString *key = specifier.properties[@"key"];
+    NSSet *globalKeys = [NSSet setWithArray:@[
+        @"isCellBlurTintEnabled",
+        @"isAdvancedTintEnabled"
+    ]];
+
+    NSString *lightKey = specifier.properties[@"lightModeKey"];
+    NSString *key;
+
+    if (lightKey && [globalKeys containsObject:lightKey]) {
+        key = lightKey;
+    } else if (lightKey) {
+        key = [self keyForBase:lightKey];
+    } else {
+        key = specifier.properties[@"key"];
+    }
+
     if (!key) return [super readPreferenceValue:specifier];
+    id value = [self readPrefs][key];
+    return value ?: specifier.properties[@"default"];
+}
 
-    NSMutableDictionary *prefs = [self readPrefs];
-    id value = prefs[key];
-    if (value) return value;
+#pragma mark - Dark/Light Mode Editing
 
-    // Return the specifier's declared default if nothing saved yet
-    id defaultValue = specifier.properties[@"default"];
-    return defaultValue;
+- (BOOL)isEditingDarkMode {
+    return [[self readPrefs][@"editingDarkMode"] boolValue];
+}
+
+- (NSString *)keyForBase:(NSString *)baseKey {
+    return [self isEditingDarkMode] ? [baseKey stringByAppendingString:@"Dark"] : baseKey;
 }
 
 #pragma mark - Color Picker
 
-- (void)showColorPickerForKey:(NSString *)key defaultColor:(UIColor *)defaultColor {
-    _currentColorKey = key;
+- (void)showColorPickerForKey:(NSString *)baseKey defaultColor:(UIColor *)defaultColor {
+    _currentColorKey = [self keyForBase:baseKey];  // resolve dark/light key here
+
+    UIColorPickerViewController *picker = [[UIColorPickerViewController alloc] init];
+    picker.delegate = self;
+    picker.supportsAlpha = YES;
+
+    NSString *saved = [self readPrefs][_currentColorKey];
+    picker.selectedColor = saved ? [self colorFromHex:saved] : (defaultColor ?: [UIColor blackColor]);
+
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)showColorPickerForKeyDirect:(NSString *)key defaultColor:(UIColor *)defaultColor {
+    _currentColorKey = key; // use the key as-is, no dark/light resolution
 
     UIColorPickerViewController *picker = [[UIColorPickerViewController alloc] init];
     picker.delegate = self;

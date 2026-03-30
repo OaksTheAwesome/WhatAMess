@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>title</key>
+    <string>Advanced Tint</string>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Light/Dark Mode Editing Selection</string>
+            <key>footerText</key>
+            <string>Select which mode's colors to edit. Dark and light selections are stored using the same option.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSegmentCell</string>
+            <key>key</key>
+            <string>editingDarkMode</string>
+            <key>defaults</key>
+            <string>com.oakstheawesome.whatamessprefs</string>
+            <key>label</key>
+            <string>Editing Mode</string>
+            <key>validTitles</key>
+            <array>
+                <string>Light</string>
+                <string>Dark</string>
+            </array>
+            <key>validValues</key>
+            <array>
+                <false/>
+                <true/>
+            </array>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Navigation Bar Buttons</string>
+            <key>footerText</key>
+            <string>Includes back button, compose, FaceTime buttons, and more.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Navigation Bar Buttons</string>
+            <key>action</key>
+            <string>pickNavButton</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Unread Indicator Dots</string>
+            <key>footerText</key>
+            <string>Unread message dots on conversation page.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Unread Indicator Dots</string>
+            <key>action</key>
+            <string>pickUnreadDot</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Switches</string>
+            <key>footerText</key>
+            <string>Change the color of switches app-wide.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Switch Colors</string>
+            <key>action</key>
+            <string>pickSwitchTint</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Search Field</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Search Field</string>
+            <key>action</key>
+            <string>pickSearchField</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Message Status String</string>
+            <key>footerText</key>
+            <string>Delivered, read receipts, and Edited label.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Status/Edited Color</string>
+            <key>action</key>
+            <string>pickStatusCell</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Contact Action Buttons</string>
+            <key>footerText</key>
+            <string>The Call, Video, Mail, and Info buttons in user and contact views. Affects text in second contact view. *shrug*</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Contact Button Color</string>
+            <key>action</key>
+            <string>pickContactAction</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>User View Labels</string>
+            <key>footerText</key>
+            <string>Colorizes text in first contact/user view.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>User View Label Color</string>
+            <key>action</key>
+            <string>pickTableLabel</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Reaction Picker Highlight</string>
+            <key>footerText</key>
+            <string>Chosen reaction highlight color.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Highlight Color</string>
+            <key>action</key>
+            <string>pickReactionHighlight</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Reaction Glyphs</string>
+            <key>footerText</key>
+            <string>Glyphs inside reaction view and in-chat reactions.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Reaction Glyphs Color</string>
+            <key>action</key>
+            <string>pickReactionGlyph</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Reaction Balloons</string>
+            <key>footerText</key>
+            <string>The balloon/bubble background of reactions in chats.</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>Reaction Balloon Color</string>
+            <key>action</key>
+            <string>pickReactionBalloon</string>
+        </dict>
+    </array>
+</dict>
+</plist>

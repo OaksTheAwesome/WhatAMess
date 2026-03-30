@@ -8,6 +8,11 @@
     if (!_specifiers) {
         _specifiers = [self loadSpecifiersFromPlistName:@"ConvList" target:self];
     }
+    for (PSSpecifier *spec in _specifiers) {
+        NSString *baseKey = spec.properties[@"lightModeKey"];
+        if (!baseKey) continue;
+        spec.properties[@"key"] = [self keyForBase:baseKey];
+    }
     return _specifiers;
 }
 
@@ -48,7 +53,10 @@
 #pragma mark - Image Picker
 
 - (void)pickConvListBgImage {
-    [self showImagePickerForDestinationPath:@"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"];
+    NSString *path = [self isEditingDarkMode]
+        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"
+        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg";
+    [self showImagePickerForDestinationPath:path];
 }
 
 @end

@@ -24,6 +24,7 @@
 
 // Color picker
 - (void)showColorPickerForKey:(NSString *)key defaultColor:(UIColor *)defaultColor;
+- (void)showColorPickerForKeyDirect:(NSString *)key defaultColor:(UIColor *)defaultColor;
 
 // Image picker
 - (void)showImagePickerForDestinationPath:(NSString *)destPath;
@@ -32,4 +33,6 @@
 - (NSString *)hexFromColor:(UIColor *)color;
 - (UIColor *)colorFromHex:(NSString *)hexString;
 
+- (BOOL)isEditingDarkMode;
+- (NSString *)keyForBase:(NSString *)baseKey;
 @end

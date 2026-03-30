@@ -5,6 +5,34 @@
 	<key>items</key>
 	<array>
 		<dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>Light/Dark Mode Editing Selection</string>
+            <key>footerText</key>
+            <string>Select which mode's colors to edit. Dark and light selections are stored using the same option.</string>
+        </dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>key</key>
+			<string>editingDarkMode</string>
+			<key>defaults</key>
+			<string>com.oakstheawesome.whatamessprefs</string>
+			<key>label</key>
+			<string>Editing Mode</string>
+			<key>validTitles</key>
+			<array>
+				<string>Light</string>
+				<string>Dark</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<false/>
+				<true/>
+			</array>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
@@ -17,10 +45,8 @@
 			<string>PSSwitchCell</string>
 			<key>label</key>
 			<string>Enable Color Background</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isChatColorBgEnabled</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -45,10 +71,8 @@
 			<string>PSSwitchCell</string>
 			<key>label</key>
 			<string>Enable Image Background</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>isChatImageBgEnabled</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<false/>
 		</dict>
@@ -65,10 +89,8 @@
 			<string>PSSliderCell</string>
 			<key>label</key>
 			<string>Image Blur Amount</string>
-			<key>key</key>
+			<key>lightModeKey</key>
 			<string>chatImageBlurAmount</string>
-			<key>defaults</key>
-			<string>com.oakstheawesome.whatamessprefs</string>
 			<key>default</key>
 			<real>0</real>
 			<key>min</key>
@@ -104,7 +126,7 @@
 			<key>label</key>
 			<string>Message Bar</string>
 			<key>footerText</key>
-			<string>Setings to customize the message bar.</string>
+			<string>Settings to customize the message bar.</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -125,24 +147,22 @@
 			<string>Your mileage for these features may vary on iOS 17.</string>
 		</dict>
 		<dict>
-    		<key>cell</key>
-    		<string>PSSwitchCell</string>
-    		<key>default</key>
-    		<false/>
-    		<key>defaults</key>
-    		<string>com.oakstheawesome.whatamessprefs</string>
-    		<key>key</key>
-    		<string>isMessageBarButtonsEnabled</string>
-    		<key>label</key>
-    		<string>Enable Camera/App Drawer Tint</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>lightModeKey</key>
+			<string>isMessageBarButtonsEnabled</string>
+			<key>label</key>
+			<string>Enable Camera/App Drawer Tint</string>
 		</dict>
 		<dict>
-    		<key>cell</key>
-    		<string>PSButtonCell</string>
-    		<key>label</key>
-    		<string>Camera/App Drawer Button Color</string>
-    		<key>action</key>
-    		<string>pickMessageBarButtonColor</string>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Camera/App Drawer Button Color</string>
+			<key>action</key>
+			<string>pickMessageBarButtonColor</string>
 		</dict>
 		<dict>
 			<key>cell</key>

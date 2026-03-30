@@ -1,4 +1,4 @@
 #import "WAMBaseListController.h"
 
-@interface WAMRootListController : WAMBaseListController
+@interface WAMRootListController : WAMBaseListController <UIDocumentPickerDelegate>
 @end

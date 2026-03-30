@@ -11,9 +11,10 @@ WhatAMessPrefs_FILES = WAMRootListController.m \
 					WAMNavBarController.m \
 					WAMMessageBarController.m \
 					WAMChatBubbleController.m \
+					WAMAdvancedTintController.m \
 					WAMBannerCell.m
 
-WhatAMessPrefs_FRAMEWORKS = UIKit
+WhatAMessPrefs_FRAMEWORKS = UIKit UniformTypeIdentifiers
 WhatAMessPrefs_PRIVATE_FRAMEWORKS = Preferences
 WhatAMessPrefs_INSTALL_PATH = /Library/PreferenceBundles
 WhatAMessPrefs_CFLAGS = -fobjc-arc

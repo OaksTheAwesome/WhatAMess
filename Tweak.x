@@ -6,11 +6,11 @@
   PREFERENCE THINGS 
 ==================== */
 
-#define kConvImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"
-#define kChatImagePath @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 #define kPrefsPlistPathRootless @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kPrefsPlistPathRootfull  @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
+
+BOOL isDarkMode();
 
 static NSMutableDictionary *cachedPrefs = nil;
 
@@ -66,6 +66,18 @@ static void refreshPrefs() {
     reloadPrefs();
 }
 
+static NSString *getConvImagePath() {
+    return isDarkMode()
+        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"
+        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg";
+}
+
+static NSString *getChatImagePath() {
+    return isDarkMode()
+        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
+        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg";
+}
+
 /*=======================
     BOOLEAN FUNCTIONS
 ========================*/
@@ -77,7 +89,8 @@ BOOL isTweakEnabled() {
 
 BOOL isModernNavBarEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isModernNavBarEnabled"] ? [prefs[@"isModernNavBarEnabled"] boolValue] : YES;
+    NSString *key = isDarkMode() ? @"isModernNavBarEnabledDark" : @"isModernNavBarEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : YES;
 }
 
 BOOL isSeparatorsEnabled() {
@@ -97,85 +110,92 @@ BOOL isPinnedGlowEnabled() {
 
 BOOL isConvColorBgEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isConvColorBgEnabled"] ? [prefs[@"isConvColorBgEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isConvColorBgEnabledDark" : @"isConvColorBgEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isChatColorBgEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isChatColorBgEnabled"] ? [prefs[@"isChatColorBgEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isChatColorBgEnabledDark" : @"isChatColorBgEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isConvImageBgEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isConvImageBgEnabled"] ? [prefs[@"isConvImageBgEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isConvImageBgEnabledDark" : @"isConvImageBgEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isChatImageBgEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isChatImageBgEnabled"] ? [prefs[@"isChatImageBgEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isChatImageBgEnabledDark" : @"isChatImageBgEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isCustomTextColorsEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isCustomTextColorsEnabled"] ? [prefs[@"isCustomTextColorsEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isCustomTextColorsEnabledDark" : @"isCustomTextColorsEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isCustomBubbleColorsEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isCustomBubbleColorsEnabled"] ? [prefs[@"isCustomBubbleColorsEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isCustomBubbleColorsEnabledDark" : @"isCustomBubbleColorsEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isModernMessageBarEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isModernMessageBarEnabled"] ? [prefs[@"isModernMessageBarEnabled"] boolValue] : YES;
+    NSString *key = isDarkMode() ? @"isModernMessageBarEnabledDark" : @"isModernMessageBarEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : YES;
 }
 
 BOOL isInputFieldCustomizationEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isInputFieldCustomizationEnabled"] ? [prefs[@"isInputFieldCustomizationEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isInputFieldCustomizationEnabledDark" : @"isInputFieldCustomizationEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isInputFieldBlurEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isInputFieldBlurEnabled"] ? [prefs[@"isInputFieldBlurEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isInputFieldBlurEnabledDark" : @"isInputFieldBlurEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isPlaceholderCustomizationEnabled() {
     NSDictionary *prefs = loadPrefs();
-    if (prefs && prefs[@"isPlaceholderCustomizationEnabled"]) {
-        return [prefs[@"isPlaceholderCustomizationEnabled"] boolValue];
-    }
-    return NO;
+    NSString *key = isDarkMode() ? @"isPlaceholderCustomizationEnabledDark" : @"isPlaceholderCustomizationEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isMessageInputTextEnabled() {
     NSDictionary *prefs = loadPrefs();
-    if (prefs && prefs[@"isMessageInputTextEnabled"]) {
-        return [prefs[@"isMessageInputTextEnabled"] boolValue];
-    }
-    return NO;
+    NSString *key = isDarkMode() ? @"isMessageInputTextEnabledDark" : @"isMessageInputTextEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isMessageBarButtonsEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isMessageBarButtonsEnabled"] ? [prefs[@"isMessageBarButtonsEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isMessageBarButtonsEnabledDark" : @"isMessageBarButtonsEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isNavBarCustomizationEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isNavBarCustomizationEnabled"] ? [prefs[@"isNavBarCustomizationEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isNavBarCustomizationEnabledDark" : @"isNavBarCustomizationEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isMessageBarCustomizationEnabled() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"isMessageBarCustomizationEnabled"] ? [prefs[@"isMessageBarCustomizationEnabled"] boolValue] : NO;
+    NSString *key = isDarkMode() ? @"isMessageBarCustomizationEnabledDark" : @"isMessageBarCustomizationEnabled";
+    return prefs[key] ? [prefs[key] boolValue] : NO;
 }
 
 BOOL isCellBlurTintEnabled() {
     NSDictionary *prefs = loadPrefs();
     return prefs[@"isCellBlurTintEnabled"] ? [prefs[@"isCellBlurTintEnabled"] boolValue] : NO;
 }
-
 BOOL isiOS17OrHigher() {
     NSOperatingSystemVersion iOS17 = {17, 0, 0};
     return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS17];
@@ -194,17 +214,22 @@ BOOL isDarkMode() {
 
 CGFloat getImageBlurAmount() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"imageBlurAmount"] ? [prefs[@"imageBlurAmount"] floatValue] : 0.0;
+    NSString *key = isDarkMode() ? @"imageBlurAmountDark" : @"imageBlurAmount";
+    return prefs[key] ? [prefs[key] floatValue] : 0.0;
 }
+
 
 CGFloat getChatImageBlurAmount() {
     NSDictionary *prefs = loadPrefs();
-    return prefs[@"chatImageBlurAmount"] ? [prefs[@"chatImageBlurAmount"] floatValue] : 0.0;
+    NSString *key = isDarkMode() ? @"chatImageBlurAmountDark" : @"chatImageBlurAmount";
+    return prefs[key] ? [prefs[key] floatValue] : 0.0;
 }
 
 /*=================================
     Helper and Getter Functions
 =================================*/
+
+static UIColor *getSystemTintColor(); //forward decl
 
 UIColor *colorFromHex(NSString *hexString) {
     if (!hexString || [hexString length] == 0) return nil;
@@ -259,48 +284,103 @@ static UIImage *loadImageUncached(NSString *path) {
 
 UIColor *getBackgroundColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"convListBackgroundColor"]) ?: [UIColor blackColor];
+    NSString *key = isDarkMode() ? @"convListBackgroundColorDark" : @"convListBackgroundColor";
+    return colorFromHex(prefs[key]) ?: [UIColor blackColor];
 }
 
 UIColor *getChatBackgroundColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"chatBackgroundColor"]) ?: [UIColor blackColor];
+    NSString *key = isDarkMode() ? @"chatBackgroundColorDark" : @"chatBackgroundColor";
+    return colorFromHex(prefs[key]) ?: [UIColor blackColor];
 }
 
 UIColor *getCellColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"convListCellColor"]) ?: [UIColor blackColor];
+    NSString *key = isDarkMode() ? @"convListCellColorDark" : @"convListCellColor";
+    return colorFromHex(prefs[key]) ?: [UIColor blackColor];
 }
 
 UIColor *getTitleTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"titleTextColor"]) ?: [UIColor whiteColor];
+    NSString *key = isDarkMode() ? @"titleTextColorDark" : @"titleTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
 }
 
 UIColor *getMessagePreviewTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"messagePreviewTextColor"]) ?: [UIColor grayColor];
+    NSString *key = isDarkMode() ? @"messagePreviewTextColorDark" : @"messagePreviewTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor grayColor];
 }
 
 UIColor *getDateTimeTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"dateTimeTextColor"]) ?: [UIColor grayColor];
+    NSString *key = isDarkMode() ? @"dateTimeTextColorDark" : @"dateTimeTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor grayColor];
 }
 
 UIColor *getConversationListTitleColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"conversationListTitleColor"]) ?: [UIColor whiteColor];
+    NSString *key = isDarkMode() ? @"conversationListTitleColorDark" : @"conversationListTitleColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
 }
 
 UIColor *getInputFieldBackgroundColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"inputFieldBackgroundColor"]) ?: [UIColor whiteColor];
+    NSString *key = isDarkMode() ? @"inputFieldBackgroundColorDark" : @"inputFieldBackgroundColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
+}
+
+static BOOL isAdvancedTintEnabled() {
+    NSDictionary *prefs = loadPrefs();
+    return prefs[@"isAdvancedTintEnabled"] ? [prefs[@"isAdvancedTintEnabled"] boolValue] : NO;
+}
+
+
+static UIColor *getAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
+    if (!isAdvancedTintEnabled()) return fallback;
+    NSDictionary *prefs = loadPrefs();
+    NSString *key = isDarkMode() ? darkKey : lightKey;
+    UIColor *color = colorFromHex(prefs[key]);
+    return color ?: fallback;
+}
+
+static UIColor *getAdvancedTintColorForView(NSString *lightKey, NSString *darkKey, UIColor *fallback, UIView *view) {
+    if (!isAdvancedTintEnabled()) return fallback;
+    NSDictionary *prefs = loadPrefs();
+    BOOL dark = NO;
+    if (@available(iOS 13.0, *)) {
+        dark = view
+            ? (view.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark)
+            : isDarkMode();
+    }
+    NSString *key = dark ? darkKey : lightKey;
+    UIColor *color = colorFromHex(prefs[key]);
+    return color ?: fallback;
+}
+
+static UIColor *getAdvancedUnreadDotColor() {
+    return getAdvancedTintColor(@"advancedUnreadDotColor", @"advancedUnreadDotColorDark", getSystemTintColor());
+}
+static UIColor *getAdvancedSwitchTintColor() {
+    return getAdvancedTintColor(@"advancedSwitchTintColor", @"advancedSwitchTintColorDark", getSystemTintColor());
+}
+static UIColor *getAdvancedSearchFieldColor() {
+    return getAdvancedTintColor(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark", getSystemTintColor());
+}
+static UIColor *getAdvancedStatusCellColor() {
+    return getAdvancedTintColor(@"advancedStatusCellColor", @"advancedStatusCellColorDark", getSystemTintColor());
+}
+static UIColor *getAdvancedTableLabelColor() {
+    return getAdvancedTintColor(@"advancedTableLabelColor", @"advancedTableLabelColorDark", getSystemTintColor());
+}
+static UIColor *getAdvancedReactionGlyphColor() {
+    return getAdvancedTintColor(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark", getSystemTintColor());
 }
 
 UIBlurEffectStyle getInputFieldBlurStyle() {
     NSDictionary *prefs = loadPrefs();
-    NSString *style = prefs[@"inputFieldBlurStyle"] ?: @"regular";
-
+    NSString *key = isDarkMode() ? @"inputFieldBlurStyleDark" : @"inputFieldBlurStyle";
+    NSString *style = prefs[key] ?: @"regular";
     if ([style isEqualToString:@"light"]) return UIBlurEffectStyleLight;
     if ([style isEqualToString:@"dark"]) return UIBlurEffectStyleDark;
     if ([style isEqualToString:@"ultraThinLight"]) return UIBlurEffectStyleSystemUltraThinMaterialLight;
@@ -310,7 +390,8 @@ UIBlurEffectStyle getInputFieldBlurStyle() {
 
 static NSString *getConversationListTitle() {
     NSDictionary *prefs = loadPrefs();
-    NSString *title = prefs[@"conversationListTitleText"];
+    NSString *key = isDarkMode() ? @"conversationListTitleTextDark" : @"conversationListTitleText";
+    NSString *title = prefs[key];
     return title.length > 0 ? title : @"Messages";
 }
 
@@ -341,21 +422,27 @@ UIImage *blurImage(UIImage *image, CGFloat blurAmount) {
 
 static UIImage *_cachedBlurredConvImage = nil;
 static NSTimeInterval _cachedBlurredConvImageTime = 0;
+static BOOL _cachedBlurredConvImageWasDark = NO;
 
 static UIImage *getBlurredConvImage() {
+    BOOL currentlyDark = isDarkMode();
     NSTimeInterval now = [[NSDate date] timeIntervalSinceReferenceDate];
-    if (!_cachedBlurredConvImage || (now - _cachedBlurredConvImageTime) > 2.0) {
-        UIImage *raw = loadImageUncached(kConvImagePath);
+    if (!_cachedBlurredConvImage 
+        || (now - _cachedBlurredConvImageTime) > 2.0
+        || _cachedBlurredConvImageWasDark != currentlyDark) {
+        UIImage *raw = loadImageUncached(getConvImagePath());
         CGFloat blur = getImageBlurAmount();
         _cachedBlurredConvImage = (raw && blur > 0) ? blurImage(raw, blur) : raw;
         _cachedBlurredConvImageTime = now;
+        _cachedBlurredConvImageWasDark = currentlyDark;
     }
     return _cachedBlurredConvImage;
 }
 
 static void invalidateConvImageCache() {
-        _cachedBlurredConvImage = nil;
-        _cachedBlurredConvImageTime = 0;
+    _cachedBlurredConvImage = nil;
+    _cachedBlurredConvImageTime = 0;
+    _cachedBlurredConvImageWasDark = NO;
 }
 
 
@@ -383,102 +470,134 @@ void applyCustomTextColors(UIView *view) {
 
 static UIColor *getSMSSentBubbleColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"sentSMSBubbleColor"]) ?: [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+    NSString *key = isDarkMode() ? @"sentSMSBubbleColorDark" : @"sentSMSBubbleColor";
+    return colorFromHex(prefs[key]) ?: [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
 }
 
 static UIColor *getSentBubbleColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"sentBubbleColor"]) ?: [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+    NSString *key = isDarkMode() ? @"sentBubbleColorDark" : @"sentBubbleColor";
+    return colorFromHex(prefs[key]) ?: [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
 }
 
 static UIColor *getReceivedBubbleColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"receivedBubbleColor"]) ?: [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    NSString *key = isDarkMode() ? @"receivedBubbleColorDark" : @"receivedBubbleColor";
+    return colorFromHex(prefs[key]) ?: [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
 }
 
 static UIColor *getReceivedTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"receivedTextColor"]);
+    NSString *key = isDarkMode() ? @"receivedTextColorDark" : @"receivedTextColor";
+    return colorFromHex(prefs[key]);
 }
+
 
 static UIColor *getSentTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"sentTextColor"]);
+    NSString *key = isDarkMode() ? @"sentTextColorDark" : @"sentTextColor";
+    return colorFromHex(prefs[key]);
 }
 
 static UIColor *getSMSSentTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"sentSMSTextColor"]);
+    NSString *key = isDarkMode() ? @"sentSMSTextColorDark" : @"sentSMSTextColor";
+    return colorFromHex(prefs[key]);
 }
 
 static UIColor *pickTimestampTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"timestampTextColor"]);
+    NSString *key = isDarkMode() ? @"timestampTextColorDark" : @"timestampTextColor";
+    return colorFromHex(prefs[key]);
 }
 
 static UIColor *getSystemTintColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"systemTintColor"]);
+    NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
+    return colorFromHex(prefs[key]);
 }
 
 static UIColor *getPlaceholderTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"placeholderTextColor"]) ?: [UIColor grayColor];
+    NSString *key = isDarkMode() ? @"placeholderTextColorDark" : @"placeholderTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor grayColor];
 }
 
 static NSString *getPlaceholderText() {
     NSDictionary *prefs = loadPrefs();
-    NSString *text = prefs[@"placeholderText"];
+    NSString *key = isDarkMode() ? @"placeholderTextDark" : @"placeholderText";
+    NSString *text = prefs[key];
     return text.length > 0 ? text : nil;
 }
 
 static UIColor *getMessageInputTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"messageInputTextColor"]) ?: [UIColor whiteColor];
+    NSString *key = isDarkMode() ? @"messageInputTextColorDark" : @"messageInputTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
 }
 
 static UIColor *getMessageBarButtonColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"messageBarButtonColor"]);
+    NSString *key = isDarkMode() ? @"messageBarButtonColorDark" : @"messageBarButtonColor";
+    return colorFromHex(prefs[key]);
 }
 
 static UIColor *getLinkPreviewBackgroundColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"linkPreviewBackgroundColor"]) ?: [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:1.0];
+    NSString *key = isDarkMode() ? @"linkPreviewBackgroundColorDark" : @"linkPreviewBackgroundColor";
+    return colorFromHex(prefs[key]) ?: [UIColor colorWithRed:0.1 green:0.1 blue:0.1 alpha:1.0];
 }
 
 static UIColor *getLinkPreviewTextColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"linkPreviewTextColor"]) ?: [UIColor whiteColor];
+    NSString *key = isDarkMode() ? @"linkPreviewTextColorDark" : @"linkPreviewTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
 }
 
 static UIColor *getPinnedBubbleColor() {
     NSDictionary *prefs = loadPrefs();
-    NSString *hexColor = prefs[@"pinnedBubbleColor"];
+    NSString *key = isDarkMode() ? @"pinnedBubbleColorDark" : @"pinnedBubbleColor";
+    NSString *hexColor = prefs[key];
     if (!hexColor || [hexColor length] == 0) return getReceivedBubbleColor();
     return colorFromHex(hexColor);
 }
 
 static UIColor *getPinnedBubbleTextColor() {
     NSDictionary *prefs = loadPrefs();
-    NSString *hexColor = prefs[@"pinnedBubbleTextColor"];
+    NSString *key = isDarkMode() ? @"pinnedBubbleTextColorDark" : @"pinnedBubbleTextColor";
+    NSString *hexColor = prefs[key];
     if (!hexColor || [hexColor length] == 0) return getReceivedTextColor();
     return colorFromHex(hexColor);
 }
 
 static UIColor *getNavBarTintColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"navBarTintColor"]) ?: getSystemTintColor();
+    NSString *key = isDarkMode() ? @"navBarTintColorDark" : @"navBarTintColor";
+    return colorFromHex(prefs[key]) ?: getSystemTintColor();
 }
 
 static UIColor *getMessageBarTintColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"messageBarTintColor"]) ?: getSystemTintColor();
+    NSString *key = isDarkMode() ? @"messageBarTintColorDark" : @"messageBarTintColor";
+    return colorFromHex(prefs[key]) ?: getSystemTintColor();
 }
 
 static UIColor *getCellBlurTintColor() {
     NSDictionary *prefs = loadPrefs();
-    return colorFromHex(prefs[@"cellTintColor"]) ?: getSystemTintColor();
+    NSString *key = isDarkMode() ? @"cellTintColorDark" : @"cellTintColor";
+    return colorFromHex(prefs[key]) ?: getSystemTintColor();
+}
+
+static UIColor *getSendArrowColor() {
+    NSDictionary *prefs = loadPrefs();
+    NSString *key = isDarkMode() ? @"sendButtonArrowColorDark" : @"sendButtonArrowColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
+}
+
+static UIColor *getSendButtonColor() {
+    NSDictionary *prefs = loadPrefs();
+    NSString *key = isDarkMode() ? @"sendButtonColorDark" : @"sendButtonColor";
+    return colorFromHex(prefs[key]) ?: [UIColor systemBlueColor];
 }
 
 /*============
@@ -494,6 +613,8 @@ static UIColor *getCellBlurTintColor() {
 
     UIColor *customTint = getSystemTintColor();
     if (!customTint) return %orig;
+
+    if ([self isKindOfClass:[UIImageView class]] && self.tag == 88771) return %orig;
 
     if ([self isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)self;
@@ -530,6 +651,55 @@ static UIColor *getCellBlurTintColor() {
             [className containsString:@"UIKBInputBackdropView"]) return %orig;
         parent = parent.superview;
         levels++;
+    }
+
+    if (isAdvancedTintEnabled()) {
+        // Check for reaction balloon context
+        UIColor *balloonColor = getAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
+        if (balloonColor) {
+            UIView *p = self.superview;
+            int l = 0;
+            while (p && l < 5) {
+                if ([p isKindOfClass:%c(CKAggregateAcknowledgmentBalloonView)]) {
+                    return balloonColor;
+                }
+                p = p.superview;
+                l++;
+            }
+        }
+
+        // Check for CNActionView context
+        UIColor *contactActionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
+        if (contactActionColor) {
+            UIView *p = self.superview;
+            int l = 0;
+            while (p && l < 10) {
+                if ([p isKindOfClass:%c(CNActionView)]) {
+                    return contactActionColor;
+                }
+                p = p.superview;
+                l++;
+            }
+        }
+
+        // Check for nav bar / contact action button context
+        UIColor *navButtonColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self);
+        if (navButtonColor) {
+            UIView *p = self.superview;
+            int l = 0;
+            while (p && l < 12) {
+                if ([p isKindOfClass:[UINavigationBar class]] ||
+                    [p isKindOfClass:%c(UINavigationButton)] ||
+                    [p isKindOfClass:%c(_UIButtonBarButton)] ||
+                    [p isKindOfClass:%c(CNActionView)] ||
+                    [NSStringFromClass([p class]) containsString:@"BarButton"] ||
+                    [NSStringFromClass([p class]) containsString:@"NavigationButton"]) {
+                    return navButtonColor;
+                }
+                p = p.superview;
+                l++;
+            }
+        }
     }
 
     return customTint;
@@ -646,7 +816,7 @@ static UIColor *getCellBlurTintColor() {
 
 %new
 -(void)updateBackground {
-    UIImage *bgImage = loadImageUncached(kConvImagePath);
+    UIImage *bgImage = loadImageUncached(getConvImagePath());
 
     for (UIView *subview in [self.view.subviews copy]) {
         if (subview.tag == 1234) [subview removeFromSuperview];
@@ -713,6 +883,21 @@ static UIColor *getCellBlurTintColor() {
         [self makeSubviewsTransparent:subview];
     }
 }
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            invalidateConvImageCache();
+            refreshPrefs();
+            [self updateBackground];
+            [self updateAllColors];
+            [self.collectionView reloadData];
+        }
+    }
+}
+
 
 -(void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -793,7 +978,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) { %orig(customTint); return; }
             break;
         }
@@ -807,7 +992,7 @@ static UIColor *getCellBlurTintColor() {
     }
 
     if ([self.text isEqualToString:@"Edited"] && [self.superview isKindOfClass:%c(_UISystemBackgroundView)]) {
-        UIColor *customTint = getSystemTintColor();
+        UIColor *customTint = getAdvancedStatusCellColor();
         if (customTint) { %orig(customTint); return; }
     }
 
@@ -816,7 +1001,7 @@ static UIColor *getCellBlurTintColor() {
         int levels2 = 0;
         while (parent2 && levels2 < 7) {
             if ([parent2 isKindOfClass:%c(CKTranscriptStatusCell)]) {
-                UIColor *customTint = getSystemTintColor();
+                UIColor *customTint = getAdvancedStatusCellColor();
                 if (customTint) { %orig(customTint); return; }
                 break;
             }
@@ -836,7 +1021,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 7) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) {
                 if (self.attributedText) {
                     NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
@@ -861,7 +1046,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 7) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) {
                 if (self.attributedText) {
                     NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
@@ -886,7 +1071,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 7) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) {
                 if (self.attributedText) {
                     NSMutableAttributedString *attrString = [[NSMutableAttributedString alloc] initWithAttributedString:self.attributedText];
@@ -933,15 +1118,11 @@ static UIColor *getCellBlurTintColor() {
 
     UIView *parent = self.superview;
     BOOL isUnreadIndicator = NO;
-    BOOL isInIndicatorCell = NO;
     int levels = 0;
 
     while (parent && levels < 10) {
         if (levels < 5 && [parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
             isUnreadIndicator = YES;
-        }
-        if ([parent isKindOfClass:%c(CKTranscriptUnavailabilityIndicatorCell)]) {
-            isInIndicatorCell = YES;
             break;
         }
         parent = parent.superview;
@@ -951,23 +1132,29 @@ static UIColor *getCellBlurTintColor() {
     if (isUnreadIndicator) {
         CGSize imageSize = image.size;
         if (imageSize.width < 20 && imageSize.height < 20) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedUnreadDotColor();
             if (customTint) {
                 UIImage *tintedImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                 %orig(tintedImage);
                 self.tintColor = customTint;
+                self.tag = 88771;
             }
         }
         return;
     }
+}
 
-    if (isInIndicatorCell) {
-        UIColor *customTint = getSystemTintColor();
-        if (customTint) {
-            UIColor *indicatorColor = [customTint colorWithAlphaComponent:0.75];
-            UIImage *templateImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-            self.image = templateImage;
-            self.tintColor = indicatorColor;
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            if (self.tag == 88771 && self.image) {
+                refreshPrefs();
+                UIImage *tintedImage = [self.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                self.image = tintedImage;
+                self.tintColor = getAdvancedUnreadDotColor();
+            }
         }
     }
 }
@@ -994,12 +1181,19 @@ static UIColor *getCellBlurTintColor() {
     }
 }
 
+%new
+- (BOOL)isBottomBar {
+    CGRect frameInScreen = [self convertRect:self.bounds toView:nil];
+    return frameInScreen.origin.y > [UIScreen mainScreen].bounds.size.height / 2.0;
+}
+
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
 
     if (isModernNavBarEnabled()) {
         BOOL hasContactView = self.window ? [self findContactViewInWindow:self.window] : NO;
+        BOOL bottom = [self isBottomBar];
         [self removeSystemViews];
 
         UIVisualEffectView *ourBlur = nil;
@@ -1016,7 +1210,7 @@ static UIColor *getCellBlurTintColor() {
         if (ourBlur) {
             CGRect blurFrame = self.bounds;
             blurFrame.size.height += 70;
-            blurFrame.origin.y = hasContactView ? 1000 : 0;
+            blurFrame.origin.y = bottom ? -70 : (hasContactView ? 1000 : 0);
             ourBlur.frame = blurFrame;
 
             [CATransaction begin];
@@ -1142,7 +1336,10 @@ static UIColor *getCellBlurTintColor() {
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blur];
     CGRect blurFrame = self.bounds;
+
+    BOOL bottom = [self isBottomBar];
     blurFrame.size.height += 70;
+    blurFrame.origin.y = bottom ? -70 : 0;
     blurView.frame = blurFrame;
     blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self insertSubview:blurView atIndex:0];
@@ -1151,14 +1348,27 @@ static UIColor *getCellBlurTintColor() {
     [CATransaction setDisableActions:YES];
     CAGradientLayer *maskLayer = [CAGradientLayer layer];
     maskLayer.frame = blurView.bounds;
-    maskLayer.colors = @[
-        (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
-        (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor
-    ];
-    maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
+
+    if (bottom) {
+        maskLayer.colors = @[
+            (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor
+        ];
+        maskLayer.locations = @[@0.0, @0.15, @0.4, @0.7, @1.0];
+    } else {
+        maskLayer.colors = @[
+            (id)[UIColor colorWithWhite:0 alpha:1.0].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.9].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.55].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:0 alpha:0.0].CGColor
+        ];
+        maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
+    }
+
     maskLayer.actions = @{@"position":[NSNull null], @"bounds":[NSNull null], @"frame":[NSNull null]};
     blurView.layer.mask = maskLayer;
     [CATransaction commit];
@@ -1399,6 +1609,23 @@ static UIColor *getCellBlurTintColor() {
     return NO;
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UICollectionView *cv = nil;
+            @try { cv = [self valueForKey:@"collectionView"]; } @catch (NSException *e) {}
+            if (!cv) @try { cv = [self valueForKey:@"_collectionView"]; } @catch (NSException *e) {}
+            if (cv) {
+                [cv reloadData];
+                [cv layoutIfNeeded];
+            }
+        }
+    }
+}
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     %orig;
@@ -1471,7 +1698,7 @@ static UIColor *getCellBlurTintColor() {
         if (subview.tag == 4321) [subview removeFromSuperview];
     }
 
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
         UIView *colorView = [[UIView alloc] initWithFrame:self.view.bounds];
@@ -1491,9 +1718,6 @@ static UIColor *getCellBlurTintColor() {
         imageView.tag = 4321;
         [self.view insertSubview:imageView atIndex:0];
     }
-
-    [self.view setNeedsLayout];
-    [self.view layoutIfNeeded];
 
     id transcriptController = nil;
     @try { transcriptController = [self valueForKey:@"_transcriptController"]; } @catch (NSException *e) {}
@@ -1515,6 +1739,17 @@ static UIColor *getCellBlurTintColor() {
         [allSubviews addObjectsFromArray:[self getAllSubviews:subview]];
     }
     return allSubviews;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self updateChatBackground];
+        }
+    }
 }
 
 -(void)dealloc {
@@ -2005,6 +2240,14 @@ static UIColor *getCellBlurTintColor() {
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) isInMessageInput = YES;
         parent = parent.superview;
         levels++;
+
+        if ([NSStringFromClass([parent class]) isEqualToString:@"CNActionView"]) {
+            for (UIView *subview in self.subviews) {
+                if ([subview class] == [UIView class]) {
+                    subview.backgroundColor = [UIColor clearColor];
+                }
+            }
+        }
     }
 
     if (isInMessageInput && !isInKeyboard) {
@@ -2030,6 +2273,14 @@ static UIColor *getCellBlurTintColor() {
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) isInMessageInput = YES;
         parent = parent.superview;
         levels++;
+
+        if ([NSStringFromClass([parent class]) isEqualToString:@"CNActionView"]) {
+            for (UIView *subview in self.subviews) {
+                if ([subview class] == [UIView class]) {
+                    subview.backgroundColor = [UIColor clearColor];
+                }
+            }
+        }
     }
 
     if (isInMessageInput && !isInKeyboard) { %orig([UIColor clearColor]); return; }
@@ -2057,6 +2308,10 @@ static UIColor *getCellBlurTintColor() {
         }
         if ([className isEqualToString:@"CKMessageEntryView"]) isInMessageInput = YES;
         if ([className isEqualToString:@"_UIBarBackground"]) self.alpha = 0.0;
+        if ([className isEqualToString:@"CNActionView"]) {
+            %orig([UIColor clearColor]);
+            return;
+        }
         parent = parent.superview;
         levels++;
     }
@@ -2083,6 +2338,7 @@ static UIColor *getCellBlurTintColor() {
         }
         if ([className isEqualToString:@"CKMessageEntryView"]) isInMessageInput = YES;
         if ([className isEqualToString:@"_UIBarBackground"]) self.alpha = 0.0;
+        if ([className isEqualToString:@"CNActionView"]) self.alpha = 0.0;
         parent = parent.superview;
         levels++;
     }
@@ -2314,12 +2570,21 @@ static UIColor *getCellBlurTintColor() {
 
 %hook CKEntryViewButton
 
+static NSInteger const kArrowOverlayTag = 99881;
+
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
 
-    UIColor *customTint = getSystemTintColor();
+    for (UIView *subview in [self.subviews copy]) {
+        if (subview.tag == kArrowOverlayTag) {
+            [subview removeFromSuperview];
+        }
+    }
+
+    UIColor *sendColor = getSendButtonColor();
     UIColor *buttonColor = getMessageBarButtonColor();
+    UIColor *arrowColor = getSendArrowColor();
     BOOL customizeOtherButtons = isMessageBarButtonsEnabled();
 
     for (UIView *subview in self.subviews) {
@@ -2335,8 +2600,8 @@ static UIColor *getCellBlurTintColor() {
 
                             if (frameSize.width > 27 && frameSize.width < 28 &&
                                 frameSize.height > 27 && frameSize.height < 28) {
-                                if (!customTint) continue;
-                                button.backgroundColor = customTint;
+                                if (!sendColor) continue;
+                                button.backgroundColor = sendColor;
                                 button.layer.cornerRadius = button.bounds.size.width / 2;
                                 button.clipsToBounds = YES;
                                 [imageView removeFromSuperview];
@@ -2345,13 +2610,14 @@ static UIColor *getCellBlurTintColor() {
                                 if (arrowImage) {
                                     UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
                                     arrowImage = [arrowImage imageWithConfiguration:config];
-                                    arrowImage = [arrowImage imageWithTintColor:[UIColor whiteColor] renderingMode:UIImageRenderingModeAlwaysOriginal];
+                                    arrowImage = [arrowImage imageWithTintColor:arrowColor renderingMode:UIImageRenderingModeAlwaysOriginal];
                                     UIImageView *arrowOverlay = [[UIImageView alloc] initWithImage:arrowImage];
                                     arrowOverlay.userInteractionEnabled = NO;
+                                    arrowOverlay.tag = kArrowOverlayTag;
                                     CGSize buttonSize = button.bounds.size;
                                     CGSize arrowSize = arrowOverlay.bounds.size;
-                                    arrowOverlay.frame = CGRectMake((buttonSize.width-arrowSize.width)/2,
-                                                                    (buttonSize.height-arrowSize.height)/2,
+                                    arrowOverlay.frame = CGRectMake((buttonSize.width - arrowSize.width) / 2,
+                                                                    (buttonSize.height - arrowSize.height) / 2,
                                                                     arrowSize.width, arrowSize.height);
                                     [button addSubview:arrowOverlay];
                                 }
@@ -2383,6 +2649,53 @@ static UIColor *getCellBlurTintColor() {
     }
 }
 
+%new
+- (void)applyColorsDirectly {
+    refreshPrefs();
+
+    UIColor *sendColor = getSendButtonColor();
+    UIColor *arrowColor = getSendArrowColor();
+    UIColor *buttonColor = getMessageBarButtonColor();
+    BOOL customizeOtherButtons = isMessageBarButtonsEnabled();
+
+    for (UIView *subview in self.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *effectView = (UIVisualEffectView *)subview;
+            for (UIView *contentSubview in effectView.contentView.subviews) {
+                if ([contentSubview isKindOfClass:[UIButton class]]) {
+                    UIButton *button = (UIButton *)contentSubview;
+
+                    UIImageView *existingArrow = nil;
+                    for (UIView *btnSubview in button.subviews) {
+                        if (btnSubview.tag == kArrowOverlayTag) {
+                            existingArrow = (UIImageView *)btnSubview;
+                            break;
+                        }
+                    }
+
+                    if (existingArrow && sendColor) {
+                        button.backgroundColor = sendColor;
+                        UIImage *arrowImage = [UIImage systemImageNamed:@"arrow.up"];
+                        if (arrowImage) {
+                            UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
+                            arrowImage = [arrowImage imageWithConfiguration:config];
+                            arrowImage = [arrowImage imageWithTintColor:arrowColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+                            existingArrow.image = arrowImage;
+                        }
+                    }
+                }
+            }
+        }
+
+        if ([subview isKindOfClass:[UIImageView class]] && subview.tag != kArrowOverlayTag && buttonColor && customizeOtherButtons) {
+            UIImageView *imgView = (UIImageView *)subview;
+            if (imgView.image) {
+                imgView.image = [imgView.image imageWithTintColor:buttonColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+            }
+        }
+    }
+}
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
@@ -2395,16 +2708,26 @@ static UIColor *getCellBlurTintColor() {
             name:kPrefsChangedNotification
             object:nil];
     }
-    
+
     [self setNeedsLayout];
     [self layoutIfNeeded];
 }
 
 %new
--(void)handleButtonPrefsChanged {
+- (void)handleButtonPrefsChanged {
     refreshPrefs();
     [self setNeedsLayout];
     [self layoutIfNeeded];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            ((void (*)(id, SEL))objc_msgSend)(self, NSSelectorFromString(@"applyColorsDirectly"));
+        }
+    }
 }
 
 %end
@@ -2432,7 +2755,7 @@ static UIColor *getCellBlurTintColor() {
 
 %new
 - (void)updateDetailsBackground {
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
         self.backgroundView = nil;
@@ -2453,6 +2776,18 @@ static UIColor *getCellBlurTintColor() {
     }
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self updateDetailsBackground];
+        }
+    }
+}
+
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     %orig;
@@ -2468,7 +2803,7 @@ static UIColor *getCellBlurTintColor() {
     [self applySearchBackground];
 }
 
-    - (void)layoutSubviews {
+- (void)layoutSubviews {
         %orig;
         if (!isTweakEnabled()) return;
         for (UIView *subview in self.subviews) {
@@ -2478,6 +2813,9 @@ static UIColor *getCellBlurTintColor() {
             }
         }
     }
+
+
+
 
 %new
 - (void)applySearchBackground {
@@ -2515,6 +2853,17 @@ static UIColor *getCellBlurTintColor() {
     } else {
         self.backgroundView = nil;
         self.backgroundColor = [UIColor systemBackgroundColor];
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self applySearchBackground];
+        }
     }
 }
 
@@ -2699,12 +3048,25 @@ static UIColor *getCellBlurTintColor() {
             break;
         }
     }
+
+    UIColor *actionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
+    if (actionColor) {
+        self.tintColor = actionColor;
+        [self applyActionColor:actionColor toView:self];
+    }
+
     [self updateIconOpacity];
 }
 
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self];
-    %orig;
+%new
+- (void)applyActionColor:(UIColor *)color toView:(UIView *)view {
+    for (UIView *sub in view.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) continue;
+        if ([sub isKindOfClass:[UILabel class]]) {
+            ((UILabel *)sub).textColor = color;
+        }
+        [self applyActionColor:color toView:sub];
+    }
 }
 
 %new
@@ -2735,6 +3097,33 @@ static UIColor *getCellBlurTintColor() {
             }
         }
     }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            cachedPrefs = nil;
+            reloadPrefs();
+            for (UIView *subview in [self.subviews copy]) {
+                if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
+                    [subview removeFromSuperview];
+                }
+            }
+            [self applyActionViewBlur];
+            UIColor *actionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
+            if (actionColor) {
+                self.tintColor = actionColor;
+                [self applyActionColor:actionColor toView:self];
+            }
+        }
+    }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
 }
 
 %end
@@ -3132,7 +3521,7 @@ static UIColor *getCellBlurTintColor() {
 
 %new
 - (void)updateRecipientBackground {
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     for (UIView *subview in [self.subviews copy]) {
         if ([subview isKindOfClass:[UIImageView class]]) {
@@ -3180,6 +3569,17 @@ static UIColor *getCellBlurTintColor() {
     }
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self updateRecipientBackground];
+        }
+    }
+}
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     %orig;
@@ -3207,7 +3607,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedTableLabelColor();
     if (!customTint) return;
     CGFloat red = 0, green = 0, blue = 0, alpha = 0;
     if (self.textColor && [self.textColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
@@ -3222,9 +3622,21 @@ static UIColor *getCellBlurTintColor() {
     if (color && [color getRed:&red green:&green blue:&blue alpha:&alpha]) {
         if (red > 0.7 && green < 0.3 && blue < 0.3) { %orig; return; }
     }
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedTableLabelColor();
     if (customTint) { %orig(customTint); return; }
     %orig;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UIColor *customTint = getAdvancedTableLabelColor();
+            if (customTint) self.textColor = customTint;
+        }
+    }
 }
 
 %end
@@ -3234,15 +3646,27 @@ static UIColor *getCellBlurTintColor() {
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedSwitchTintColor();
     if (customTint) self.onTintColor = customTint;
 }
 
 - (void)setOn:(BOOL)on animated:(BOOL)animated {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedSwitchTintColor();
     if (customTint) self.onTintColor = customTint;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UIColor *customTint = getAdvancedSwitchTintColor();
+            if (customTint) self.onTintColor = customTint;
+        }
+    }
 }
 
 %end
@@ -3253,14 +3677,14 @@ static UIColor *getCellBlurTintColor() {
     %orig;
     if (!isTweakEnabled()) return;
     if ([text isEqualToString:@"Report Junk"]) {
-        UIColor *customTint = getSystemTintColor();
+        UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
         if (customTint) { self.textColor = customTint; return; }
     }
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) self.textColor = customTint;
             break;
         }
@@ -3273,14 +3697,14 @@ static UIColor *getCellBlurTintColor() {
     %orig;
     if (!isTweakEnabled()) return;
     if ([self.text isEqualToString:@"Report Junk"]) {
-        UIColor *customTint = getSystemTintColor();
+        UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
         if (customTint) { self.textColor = customTint; return; }
     }
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) self.textColor = customTint;
             break;
         }
@@ -3292,14 +3716,14 @@ static UIColor *getCellBlurTintColor() {
 - (void)setTextColor:(UIColor *)color {
     if (!isTweakEnabled()) { %orig; return; }
     if ([self.text isEqualToString:@"Report Junk"]) {
-        UIColor *customTint = getSystemTintColor();
+        UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
         if (customTint) { %orig(customTint); return; }
     }
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) { %orig(customTint); return; }
             break;
         }
@@ -3313,14 +3737,14 @@ static UIColor *getCellBlurTintColor() {
     %orig;
     if (!isTweakEnabled()) return;
     if ([self.text isEqualToString:@"Report Junk"]) {
-        UIColor *customTint = getSystemTintColor();
+        UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
         if (customTint) { self.textColor = customTint; return; }
     }
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) self.textColor = customTint;
             break;
         }
@@ -3339,7 +3763,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) { %orig(customTint); return; }
             break;
         }
@@ -3356,7 +3780,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) {
                 self.tintColor = customTint;
                 for (UIView *subview in self.subviews) {
@@ -3377,7 +3801,7 @@ static UIColor *getCellBlurTintColor() {
     int levels = 0;
     while (parent && levels < 10) {
         if ([parent isKindOfClass:%c(CKTranscriptStatusCell)]) {
-            UIColor *customTint = getSystemTintColor();
+            UIColor *customTint = getAdvancedStatusCellColor();
             if (customTint) {
                 self.tintColor = customTint;
                 for (UIView *subview in self.subviews) {
@@ -3398,7 +3822,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedReactionGlyphColor();
     if (customTint) {
         self.tintColor = customTint;
         for (UIView *subview in self.subviews) {
@@ -3410,7 +3834,7 @@ static UIColor *getCellBlurTintColor() {
 
 - (void)setTintColor:(UIColor *)color {
     if (!isTweakEnabled()) { %orig; return; }
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedReactionGlyphColor();
     if (customTint) {
         %orig(customTint);
         for (UIView *subview in self.subviews) {
@@ -3425,7 +3849,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedReactionGlyphColor();
     if (customTint) {
         self.tintColor = customTint;
         for (UIView *subview in self.subviews) {
@@ -3438,13 +3862,21 @@ static UIColor *getCellBlurTintColor() {
 %new
 - (void)applyGlyphTintRecursively:(UIView *)view {
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getSystemTintColor();
+    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
     if (customGlyphTint) {
-        CGFloat h, s, b, a;
-        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-            s *= 0.2;
-            b = MIN(1.0, b + 0.2);
-            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            NSDictionary *prefs = loadPrefs();
+        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
+        if (prefs[key]) {
+            // User explicitly set this color, use it directly
+            glyphTint = customGlyphTint;
+        } else {
+            // Falling back to system tint, apply derivation
+            CGFloat h, s, b, a;
+            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+                s *= 0.3;
+                b = MIN(1.0, b + 0.4);
+                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            }
         }
     }
 
@@ -3504,7 +3936,7 @@ static UIColor *getCellBlurTintColor() {
 
 %new
 - (void)applyPlatterBackground {
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
         self.backgroundColor = getChatBackgroundColor();
@@ -3519,6 +3951,18 @@ static UIColor *getCellBlurTintColor() {
         imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self insertSubview:imageView atIndex:0];
         self.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            if (self.bounds.size.height < 200) return;
+            refreshPrefs();
+            [self applyPlatterBackground];
+        }
     }
 }
 
@@ -3544,7 +3988,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
     if (!customTint) return;
     [self colorReportJunkButton:self withColor:customTint];
 }
@@ -3552,7 +3996,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled() || !self.window) return;
-    UIColor *customTint = getSystemTintColor();
+    UIColor *customTint = getAdvancedTintColorForView(@"advancedReportJunkColor", @"advancedReportJunkColorDark", getSystemTintColor(), self);
     if (!customTint) return;
     [self colorReportJunkButton:self withColor:customTint];
 }
@@ -3574,13 +4018,21 @@ static UIColor *getCellBlurTintColor() {
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
 
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getSystemTintColor();
+    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
     if (customGlyphTint) {
-        CGFloat h, s, b, a;
-        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-            s *= 0.3;
-            b = MIN(1.0, b + 0.4);
-            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            NSDictionary *prefs = loadPrefs();
+        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
+        if (prefs[key]) {
+            // User explicitly set this color, use it directly
+            glyphTint = customGlyphTint;
+        } else {
+            // Falling back to system tint, apply derivation
+            CGFloat h, s, b, a;
+            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+                s *= 0.3;
+                b = MIN(1.0, b + 0.4);
+                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            }
         }
     }
 
@@ -3615,15 +4067,24 @@ static UIColor *getCellBlurTintColor() {
     if (!isTweakEnabled() || !self.window || !isCustomBubbleColorsEnabled()) return;
 
     UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getSystemTintColor();
+    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
     if (customGlyphTint) {
-        CGFloat h, s, b, a;
-        if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-            s *= 0.3;
-            b = MIN(1.0, b + 0.4);
-            glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            NSDictionary *prefs = loadPrefs();
+        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
+        if (prefs[key]) {
+            // User explicitly set this color, use it directly
+            glyphTint = customGlyphTint;
+        } else {
+            // Falling back to system tint, apply derivation
+            CGFloat h, s, b, a;
+            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
+                s *= 0.3;
+                b = MIN(1.0, b + 0.4);
+                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+            }
         }
     }
+    
     self.tintColor = glyphTint;
     for (UIView *subview in self.subviews) subview.tintColor = glyphTint;
 }
@@ -3678,6 +4139,7 @@ static UIColor *getCellBlurTintColor() {
 
 - (void)setTintColor:(UIColor *)color {
     if (!isTweakEnabled()) { %orig; return; }
+
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
@@ -3690,12 +4152,16 @@ static UIColor *getCellBlurTintColor() {
         parent = parent.superview;
         levels++;
     }
+
+    UIColor *navColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", getSystemTintColor(), self);
+    if (navColor) { %orig(navColor); return; }
     %orig;
 }
 
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled() || !self.window) return;
+
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
@@ -3703,10 +4169,25 @@ static UIColor *getCellBlurTintColor() {
             [parent isKindOfClass:%c(UISearchBarBackground)]) {
             UIColor *customTint = getSystemTintColor();
             if (customTint) self.tintColor = customTint;
-            break;
+            return;
         }
         parent = parent.superview;
         levels++;
+    }
+
+    UIColor *navColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", getSystemTintColor(), self);
+    if (navColor) self.tintColor = navColor;
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UIColor *navColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", getSystemTintColor(), self);
+            if (navColor) self.tintColor = navColor;
+        }
     }
 }
 
@@ -3795,15 +4276,35 @@ static UIColor *getCellBlurTintColor() {
     [self applySearchFieldTint];
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self applySearchFieldTint];
+        }
+    }
+}
+
 %new
 - (void)applySearchFieldTint {
-    UIColor *accent = getSystemTintColor();
+    UIColor *accent = getAdvancedSearchFieldColor();
     if (!accent) return;
 
-    CGFloat h, s, b, a;
-    if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
-        s *= 0.6;
-        accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6];
+    BOOL useFlat = NO;
+    if (isAdvancedTintEnabled()) {
+        NSDictionary *prefs = loadPrefs();
+        NSString *key = isDarkMode() ? @"advancedSearchFieldColorDark" : @"advancedSearchFieldColor";
+        useFlat = (prefs[key] != nil);
+    }
+
+    if (!useFlat) {
+        CGFloat h, s, b, a;
+        if ([accent getHue:&h saturation:&s brightness:&b alpha:&a]) {
+            s *= 0.6;
+            accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6];
+        }
     }
 
     if (self.placeholder) {
@@ -4038,7 +4539,7 @@ static UIColor *getCellBlurTintColor() {
     %orig;
     if (!isTweakEnabled() || !self.superview) return;
 
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
         self.backgroundColor = getChatBackgroundColor();
@@ -4048,7 +4549,8 @@ static UIColor *getCellBlurTintColor() {
 
         for (UIView *subview in [self.superview.subviews copy]) {
             if ([subview isKindOfClass:[UIImageView class]]) {
-                if (((UIImageView *)subview).contentMode == UIViewContentModeScaleAspectFill) [subview removeFromSuperview];
+                if (((UIImageView *)subview).contentMode == UIViewContentModeScaleAspectFill)
+                    [subview removeFromSuperview];
             }
         }
 
@@ -4060,30 +4562,31 @@ static UIColor *getCellBlurTintColor() {
         imageView.userInteractionEnabled = NO;
         [self.superview insertSubview:imageView atIndex:0];
         self.backgroundColor = [UIColor clearColor];
-    }else{
+    } else {
         %orig;
     }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf applyAdvancedTintToContactLabels];
+    });
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
-    if (!isTweakEnabled()) { 
-        %orig; 
-        return; 
-    }
-    if (isChatColorBgEnabled()) { 
-        %orig(getChatBackgroundColor()); 
-    }
-    else if (isChatImageBgEnabled()) { 
-        %orig([UIColor clearColor]); 
-    }
-    else { 
-        %orig; 
+    if (!isTweakEnabled()) { %orig; return; }
+    if (isChatColorBgEnabled()) {
+        %orig(getChatBackgroundColor());
+    } else if (isChatImageBgEnabled()) {
+        %orig([UIColor clearColor]);
+    } else {
+        %orig;
     }
 }
 
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
     if (self.superview && isChatImageBgEnabled()) {
         for (UIView *subview in self.superview.subviews) {
             if ([subview isKindOfClass:[UIImageView class]]) {
@@ -4096,6 +4599,103 @@ static UIColor *getCellBlurTintColor() {
             }
         }
         self.backgroundColor = [UIColor clearColor];
+    }
+
+    [self applyAdvancedTintToContactLabels];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UIImage *chatBgImage = loadImageUncached(getChatImagePath());
+            if (isChatColorBgEnabled()) {
+                self.backgroundColor = getChatBackgroundColor();
+            } else if (chatBgImage && isChatImageBgEnabled()) {
+                CGFloat blurAmount = getChatImageBlurAmount();
+                if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
+                for (UIView *subview in [self.superview.subviews copy]) {
+                    if ([subview isKindOfClass:[UIImageView class]]) {
+                        UIImageView *imgView = (UIImageView *)subview;
+                        if (imgView.contentMode == UIViewContentModeScaleAspectFill)
+                            [imgView removeFromSuperview];
+                    }
+                }
+                UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.frame];
+                imageView.image = chatBgImage;
+                imageView.contentMode = UIViewContentModeScaleAspectFill;
+                imageView.clipsToBounds = YES;
+                imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                imageView.userInteractionEnabled = NO;
+                [self.superview insertSubview:imageView atIndex:0];
+                self.backgroundColor = [UIColor clearColor];
+            }
+            __weak typeof(self) weakSelf = self;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [weakSelf applyAdvancedTintToContactLabels];
+            });
+        }
+    }
+}
+
+%new
+- (void)applyAdvancedTintToContactLabels {
+    UIColor *actionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", getSystemTintColor(), self);
+    if (!actionColor) return;
+    [self walkViewForTintLabels:self color:actionColor];
+}
+
+%new
+- (void)walkViewForTintLabels:(UIView *)view color:(UIColor *)color {
+    NSString *className = NSStringFromClass([view class]);
+    if ([className containsString:@"Keyboard"] ||
+        [className containsString:@"UIKBVisualEffectView"]) return;
+
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        CGFloat lr, lg, lb, la;
+        if ([label.textColor getRed:&lr green:&lg blue:&lb alpha:&la]) {
+            UIColor *systemTint = getSystemTintColor();
+            if (systemTint) {
+                CGFloat tr, tg, tb, ta;
+                if ([systemTint getRed:&tr green:&tg blue:&tb alpha:&ta]) {
+                    if (fabs(lr-tr) < 0.05 && fabs(lg-tg) < 0.05 && fabs(lb-tb) < 0.05) {
+                        label.textColor = color;
+                        return;
+                    }
+                }
+            }
+            UIColor *sysBlue = [UIColor systemBlueColor];
+            CGFloat br, bg, bb, ba;
+            if ([sysBlue getRed:&br green:&bg blue:&bb alpha:&ba]) {
+                if (fabs(lr-br) < 0.05 && fabs(lg-bg) < 0.05 && fabs(lb-bb) < 0.05) {
+                    label.textColor = color;
+                    return;
+                }
+            }
+        }
+    }
+
+    if ([view isKindOfClass:[UIImageView class]]) {
+        UIImageView *iv = (UIImageView *)view;
+        if (iv.tintColor) {
+            CGFloat lr, lg, lb, la;
+            UIColor *systemTint = getSystemTintColor();
+            if (systemTint && [iv.tintColor getRed:&lr green:&lg blue:&lb alpha:&la]) {
+                CGFloat tr, tg, tb, ta;
+                if ([systemTint getRed:&tr green:&tg blue:&tb alpha:&ta]) {
+                    if (fabs(lr-tr) < 0.05 && fabs(lg-tg) < 0.05 && fabs(lb-tb) < 0.05) {
+                        iv.tintColor = color;
+                    }
+                }
+            }
+        }
+    }
+
+    for (UIView *subview in view.subviews) {
+        [self walkViewForTintLabels:subview color:color];
     }
 }
 
@@ -4301,7 +4901,7 @@ static UIColor *getCellBlurTintColor() {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *accentColor = getSystemTintColor();
+    UIColor *accentColor = getAdvancedTintColorForView(@"advancedReactionHighlightColor", @"advancedReactionHighlightColorDark", getSystemTintColor(), (UIView *)self);
     if (!accentColor) return;
 
     UIView *selfView = (UIView *)self;
@@ -4326,44 +4926,87 @@ static UIColor *getCellBlurTintColor() {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getSystemTintColor();
-    if (!customTint) return;
-    CGFloat h, s, b, a;
-    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-        s *= 0.5;
-        b = MIN(1.0, b * 1.3);
-        customTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
-    }
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIView class]]) {
-            for (UIView *innerView in subview.subviews) {
-                if ([innerView isKindOfClass:[UILabel class]]) ((UILabel *)innerView).textColor = customTint;
-            }
-        }
-    }
+    [self applyCanvasBackButtonStyle];
 }
 
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled() || !self.window) return;
-    UIColor *customTint = getSystemTintColor();
-    if (!customTint) return;
-    CGFloat h, s, b, a;
-    if ([customTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-        s *= 0.5;
-        b = MIN(1.0, b * 1.3);
-        customTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
-    }
-    for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIView class]]) {
-            for (UIView *innerView in subview.subviews) {
-                if ([innerView isKindOfClass:[UILabel class]]) ((UILabel *)innerView).textColor = customTint;
-            }
+    [self applyCanvasBackButtonStyle];
+
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(handleCanvasBackButtonPrefsChanged)
+        name:kPrefsChangedNotification
+        object:nil];
+}
+
+- (void)tintColorDidChange {
+    %orig;
+    if (!isTweakEnabled()) return;
+    [self applyCanvasBackButtonStyle];
+}
+
+%new
+- (void)handleCanvasBackButtonPrefsChanged {
+    refreshPrefs();
+    [self applyCanvasBackButtonStyle];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self applyCanvasBackButtonStyle];
         }
     }
 }
 
+%new
+- (void)applyCanvasBackButtonStyle {
+    UIColor *bubbleColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", getSystemTintColor(), self);
+    if (!bubbleColor) return;
+
+    CGFloat h, s, b, a;
+    UIColor *adjustedBubbleColor = bubbleColor;
+    if ([bubbleColor getHue:&h saturation:&s brightness:&b alpha:&a]) {
+        s = MIN(1.0, s * 1.1);
+        b = MIN(1.0, b * 1.3);
+        adjustedBubbleColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
+    }
+
+    CGFloat r, g, bl, al;
+    [adjustedBubbleColor getRed:&r green:&g blue:&bl alpha:&al];
+    CGFloat luminance = 0.299 * r + 0.587 * g + 0.114 * bl;
+    UIColor *textColor = luminance > 0.5 ? [UIColor blackColor] : [UIColor whiteColor];
+
+    [self applyNavColor:adjustedBubbleColor textColor:textColor toView:self];
+}
+
+%new
+- (void)applyNavColor:(UIColor *)color textColor:(UIColor *)textColor toView:(UIView *)view {
+    for (UIView *subview in view.subviews) {
+        if ([subview isKindOfClass:[UIVisualEffectView class]]) continue;
+        if ([subview isKindOfClass:[UILabel class]]) {
+            ((UILabel *)subview).textColor = textColor;
+        } else if (![subview isKindOfClass:[UIImageView class]]) {
+            if (subview.backgroundColor && ![subview.backgroundColor isEqual:[UIColor clearColor]]) {
+                subview.backgroundColor = color;
+            }
+        }
+        [self applyNavColor:color textColor:textColor toView:subview];
+    }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
+}
+
 %end
+
 
 %hook CKPinnedConversationTypingBubble
 
@@ -4495,6 +5138,54 @@ static UIColor *getCellBlurTintColor() {
             if ([replicatorLayer.sublayers firstObject]) {
                 ((CALayer *)[replicatorLayer.sublayers firstObject]).backgroundColor = dotColor.CGColor;
             }
+        }
+    }
+}
+
+%end
+
+%hook CKNavigationBarCanvasView
+
+- (void) didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) return;
+
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)sub;
+            label.textColor = getConversationListTitleColor();
+        }
+    }
+}
+
+%end
+
+%hook CKPhotosSearchResultsModeHeaderReusableView
+
+- (void) setBackgroundColor {
+    %orig;
+    self.backgroundColor = [UIColor clearColor];
+    return;
+}
+
+- (void) layoutSubviews {
+    %orig;
+    self.backgroundColor = [UIColor clearColor];
+    return;
+}
+
+%end
+
+%hook CKQuickActionSaveButton
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self setNeedsLayout];
+            [self layoutIfNeeded];
         }
     }
 }
@@ -4634,7 +5325,7 @@ static UIColor *getCellBlurTintColor() {
         }
     }
 
-    UIImage *chatBgImage = loadImageUncached(kChatImagePath);
+    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
         contentView.backgroundColor = getChatBackgroundColor();
@@ -4752,6 +5443,18 @@ static UIColor *getCellBlurTintColor() {
     [self layoutIfNeeded];
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self setNeedsLayout];
+            [self layoutIfNeeded];
+        }
+    }
+}
+
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     %orig;
@@ -4792,6 +5495,18 @@ static UIColor *getCellBlurTintColor() {
     if (customLinkColor) self.backgroundColor = customLinkColor;
     [self setNeedsLayout];
     [self layoutIfNeeded];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+            if (customLinkColor) self.backgroundColor = customLinkColor;
+        }
+    }
 }
 
 - (void)dealloc {
@@ -4861,6 +5576,17 @@ static UIColor *getCellBlurTintColor() {
                     label.textColor = [UIColor colorWithHue:h saturation:s brightness:b alpha:0.7];
                 }
             }
+        }
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            refreshPrefs();
+            [self applyLinkTextColors];
         }
     }
 }

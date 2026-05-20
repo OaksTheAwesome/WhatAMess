@@ -1,4 +1,23 @@
 #import "WAMBaseListController.h"
+#import <stdlib.h>
+#import <sys/syslimits.h>
+
+NSString *WAMJBPath(NSString *suffix) {
+    static NSString *root = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        char buf[PATH_MAX];
+        if (realpath("/var/jb", buf)) {
+            // Drop a redundant trailing "/var/jb" if realpath returned the same path
+            // (rootless: /var/jb -> /var/jb itself).
+            root = [NSString stringWithUTF8String:buf];
+        } else {
+            // /var/jb doesn't exist — rootful jailbreak, paths are at the system root.
+            root = @"";
+        }
+    });
+    return [root stringByAppendingString:suffix ?: @""];
+}
 
 @implementation WAMBaseListController
 
@@ -36,6 +55,22 @@
         CFSTR(kWAMPrefsChanged),
         NULL, NULL, YES
     );
+}
+
+#pragma mark - View Lifecycle
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    NSMutableDictionary *prefs = [self readPrefs];
+    if (!prefs[@"editingDarkMode"]) {
+        BOOL dark = NO;
+        if (@available(iOS 13.0, *)) {
+            dark = ([UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark);
+        }
+        [self saveValue:@(dark) forKey:@"editingDarkMode"];
+        _specifiers = nil;
+        [self reloadSpecifiers];
+    }
 }
 
 #pragma mark - PSListController Override

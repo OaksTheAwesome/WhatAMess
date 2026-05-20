@@ -33,8 +33,8 @@
 
 - (void)pickChatBgImage {
     NSString *path = [self isEditingDarkMode]
-        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
-        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg";
+        ? WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg")
+        : WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg");
     [self showImagePickerForDestinationPath:path];
 }
 

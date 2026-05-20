@@ -34,9 +34,9 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>Respring</string>
+			<string>Kill Messages (Apply Changes)</string>
 			<key>action</key>
-			<string>respring</string>
+			<string>killApp</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -132,7 +132,7 @@
 			<key>label</key>
 			<string>Cell Settings</string>
 			<key>footerText</key>
-			<string>Colorizes the cells app-wide.</string>
+			<string>Colorizes the cells in contact views.</string>
 		</dict>
 		<dict>
     		<key>cell</key>
@@ -240,7 +240,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Version 1.1 | WhatAMess by OaksTheAwesome | 2026</string>
+			<string>Version 1.2 | WhatAMess by OaksTheAwesome | 2026</string>
 			<key>footerText</key>
 			<string>Made with ❤️ from the Show Me State</string>
 		</dict>

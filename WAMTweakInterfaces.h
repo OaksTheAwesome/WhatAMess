@@ -4,6 +4,7 @@
 -(void)applyCustomColorsToCKLabelsInView:(UIView *)view;
 -(void)handlePrefsChanged;
 -(void)updateAllColors;
+-(void)applyCustomNavTitle;
 @end
 
 @interface CKTranscriptCollectionViewController : UIViewController
@@ -23,6 +24,7 @@
 -(void)createOurBlur;
 -(void)removeSystemViews;
 -(void)ensureBlurExists;
+-(void)applyModernTintOverlay:(UIVisualEffectView *)blurView;
 -(BOOL)findContactViewInWindow:(UIView *)view;
 - (BOOL)isBottomBar;
 @end
@@ -35,6 +37,7 @@
 
 @interface CKPinnedConversationView : UIView
 -(void)applyPinnedGlow;
+-(void)handlePinnedGlowPrefsChanged;
 @end
 
 @class CKConversationListCollectionViewController;
@@ -99,6 +102,8 @@
 -(UITextView *)findTextView:(UIView *)view;
 -(UIView *)findRoundedView:(UIView *)view;
 -(UIView *)findViewByClassName:(UIView *)view;
+-(void)handleAppDidBecomeActive;
+-(void)setNeedsLayoutRecursively:(UIView *)view;
 @end
 
 @interface UIKBVisualEffectView : UIVisualEffectView
@@ -110,10 +115,13 @@
 
 @interface CKEntryViewButton : UIView
 -(void)handleButtonPrefsChanged;
+-(void)handleButtonResumeActive;
+-(void)applyColorsDirectly;
 @end
 
 @interface CKDetailsTableView : UITableView
 -(void)updateDetailsBackground;
+-(void)applyDetailsNavTitleColor;
 @end
 
 @interface _UITableViewHeaderFooterContentView : UIView
@@ -167,6 +175,24 @@
 
 @interface _UIPlatterClippingView : UIView
 -(void)applyPlatterBackground;
+@end
+
+@interface _UIPlatterTransformView : UIView
+@end
+
+@interface _UIPortalView : UIView
+@end
+
+@interface _UIReplicantView : UIView
+@end
+
+@interface _UIPlatterShadowView : UIView
+@end
+
+@interface _UIPlatterSoftShadowView : UIView
+@end
+
+@interface _UICutoutShadowView : UIView
 @end
 
 @interface _UISystemBackgroundView : UIView
@@ -244,6 +270,8 @@
 
 @interface CKPinnedConversationSummaryBubble : UIView
 -(void)applyPinnedBubbleStyle;
+- (void)updateWAMPinnedColors;
+- (void)handleWAMPinnedPrefsChanged;
 @end
 
 @interface CNContactView : UIView
@@ -293,4 +321,22 @@
 @end
 
 @interface CKPhotosSearchResultsModeHeaderReusableView : UIView
+@end
+
+@interface CKMessageEntryWaveformView : UIView
+-(void)applyWAMAudioStyling;
+-(void)applyTintRecursively:(UIView *)view color:(UIColor *)color;
+@end
+
+@interface CKMessageEntryRecordedAudioView : UIView
+- (void)applyWAMAudioStyling;
+- (void)applyTintRecursively:(UIView *)view color:(UIColor *)color;
+@end
+
+@interface CKAvatarNavigationBar
+- (void)handleWAMTitlePrefsChanged;
+- (void)applyWAMTitleStyling;
+@end
+
+@interface CKConversationListEmbeddedStandardTableViewCell
 @end

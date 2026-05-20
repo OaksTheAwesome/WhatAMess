@@ -56,7 +56,7 @@
 			<key>label</key>
 			<string>Message Bar Customization</string>
 			<key>footerText</key>
-			<string>Tints the message bar's default blur. Similar to the modern NavBar, only works if modern Message Bar is disabled.</string>
+			<string>Tints the message bar's blur. Works for both stock and modern message bars.</string>
 		</dict>
 		<dict>
 			<key>cell</key>

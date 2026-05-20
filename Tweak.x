@@ -2,6 +2,18 @@
 #import <objc/runtime.h>
 #import <WAMTweakInterfaces.h>
 
+/*=====================
+  A NOTE FROM THE DEV
+=======================
+
+Welcome to my really crummy first attempt at a tweak! Made with iOS 16 in mind, iOS 17 NathanLR and iOS 15 afterwards.
+Honestly proabably (definitely) isn't the most optimized thing ever but, hey, it works.
+OaksTheAwesome 2026 blah blah blah. If I fall off the face of the Earth feel free to port this/update this, etc.
+It's open source after all.
+
+Here be dragons!*/
+
+
 /* ===================
   PREFERENCE THINGS 
 ==================== */
@@ -10,42 +22,57 @@
 #define kPrefsPlistPathRootless @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kPrefsPlistPathRootfull  @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 
+/*
+static void logToFile(NSString *message) {
+    NSString *log = [NSString stringWithFormat:@"%@\n", message];
+    NSString *path = @"/var/jb/var/mobile/Library/WhatAMess.log";
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    if (handle) {
+        [handle seekToEndOfFile];
+        [handle writeData:[log dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    } else {
+        [log writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
+}
+*/
+
+
 BOOL isDarkMode();
+BOOL isiOS15();
+
+//Version Splash screen, make sure to bump this value so it acutally registers an update occurred.
+#define kWAMTweakVersion @"1.2"
+static NSString * const kWAMChangelogTitle = @"What's New in WhatAMess";
+static NSString * const kWAMGitHubURL = @"https://github.com/OaksTheAwesome/WhatAMess";
 
 static NSMutableDictionary *cachedPrefs = nil;
+static BOOL gWAMIsDarkModeOnIOS15 = NO;
+static BOOL gWAMChangelogShownThisLaunch = NO;
+
+static const char kWAMOrigDateColorKey = 0;
+static const char kWAMOrigTitleColorKey = 0;
+static const char kWAMOrigPreviewColorKey = 0;
+static const char kWAMOrigTintColorKey = 0;
+static const char kWAMInputFieldBlurKey = 0;
+static const char kWAMEffectExpandedKey = 0;
+
+static UIColor *WAMPinnedBubbleLightColor = nil;
+static UIColor *WAMPinnedBubbleDarkColor = nil;
+static UIColor *WAMPinnedTextLightColor = nil;
+static UIColor *WAMPinnedTextDarkColor = nil;
+static UIColor *WAMPinnedBubbleCurrentColor = nil;
+static UIColor *WAMPinnedTextCurrentColor = nil;
 
 static void reloadPrefs() {
     NSMutableDictionary *fromDisk = [NSMutableDictionary dictionaryWithContentsOfFile:kPrefsPlistPathRootless];
     if (!fromDisk || fromDisk.count == 0) {
         fromDisk = [NSMutableDictionary dictionaryWithContentsOfFile:kPrefsPlistPathRootfull];
     }
-    if (fromDisk && fromDisk.count > 0) {
-        cachedPrefs = fromDisk;
-        return;
-    }
-
-    CFPreferencesSynchronize(
-        CFSTR("com.oakstheawesome.whatamessprefs"),
-        kCFPreferencesCurrentUser,
-        kCFPreferencesAnyHost
-    );
-    CFArrayRef keyList = CFPreferencesCopyKeyList(
-        CFSTR("com.oakstheawesome.whatamessprefs"),
-        kCFPreferencesCurrentUser,
-        kCFPreferencesAnyHost
-    );
-    if (keyList) {
-        cachedPrefs = (__bridge_transfer NSMutableDictionary *)CFPreferencesCopyMultiple(
-            keyList,
-            CFSTR("com.oakstheawesome.whatamessprefs"),
-            kCFPreferencesCurrentUser,
-            kCFPreferencesAnyHost
-        );
-        CFRelease(keyList);
-    }
-    if (!cachedPrefs) {
-        cachedPrefs = [NSMutableDictionary new];
-    }
+    // Plist file is the sole source of truth. We intentionally do NOT fall back to
+    // CFPreferences here — cfprefsd's in-memory cache survives prefs-file deletion and
+    // would otherwise resurrect stale values (e.g. lastSeenChangelogVersion) after a reset.
+    cachedPrefs = (fromDisk && fromDisk.count > 0) ? fromDisk : [NSMutableDictionary new];
 }
 
 static void reloadPrefsAndNotify() {
@@ -77,6 +104,8 @@ static NSString *getChatImagePath() {
         ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
         : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg";
 }
+
+static NSString *WAMLastKnownTitle = nil;
 
 /*=======================
     BOOLEAN FUNCTIONS
@@ -150,34 +179,33 @@ BOOL isModernMessageBarEnabled() {
     return prefs[key] ? [prefs[key] boolValue] : YES;
 }
 
-BOOL isInputFieldCustomizationEnabled() {
+static BOOL readModeBoolWithFallback(NSString *lightKey, NSString *darkKey) {
     NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isInputFieldCustomizationEnabledDark" : @"isInputFieldCustomizationEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    if (isDarkMode()) {
+        return prefs[darkKey] ? [prefs[darkKey] boolValue] : NO;
+    }
+    if (prefs[lightKey]) return [prefs[lightKey] boolValue];
+    return prefs[darkKey] ? [prefs[darkKey] boolValue] : NO;
+}
+
+BOOL isInputFieldCustomizationEnabled() {
+    return readModeBoolWithFallback(@"isInputFieldCustomizationEnabled", @"isInputFieldCustomizationEnabledDark");
 }
 
 BOOL isInputFieldBlurEnabled() {
-    NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isInputFieldBlurEnabledDark" : @"isInputFieldBlurEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    return readModeBoolWithFallback(@"isInputFieldBlurEnabled", @"isInputFieldBlurEnabledDark");
 }
 
 BOOL isPlaceholderCustomizationEnabled() {
-    NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isPlaceholderCustomizationEnabledDark" : @"isPlaceholderCustomizationEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    return readModeBoolWithFallback(@"isPlaceholderCustomizationEnabled", @"isPlaceholderCustomizationEnabledDark");
 }
 
 BOOL isMessageInputTextEnabled() {
-    NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isMessageInputTextEnabledDark" : @"isMessageInputTextEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    return readModeBoolWithFallback(@"isMessageInputTextEnabled", @"isMessageInputTextEnabledDark");
 }
 
 BOOL isMessageBarButtonsEnabled() {
-    NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isMessageBarButtonsEnabledDark" : @"isMessageBarButtonsEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    return readModeBoolWithFallback(@"isMessageBarButtonsEnabled", @"isMessageBarButtonsEnabledDark");
 }
 
 BOOL isNavBarCustomizationEnabled() {
@@ -187,22 +215,41 @@ BOOL isNavBarCustomizationEnabled() {
 }
 
 BOOL isMessageBarCustomizationEnabled() {
-    NSDictionary *prefs = loadPrefs();
-    NSString *key = isDarkMode() ? @"isMessageBarCustomizationEnabledDark" : @"isMessageBarCustomizationEnabled";
-    return prefs[key] ? [prefs[key] boolValue] : NO;
+    return readModeBoolWithFallback(@"isMessageBarCustomizationEnabled", @"isMessageBarCustomizationEnabledDark");
 }
 
 BOOL isCellBlurTintEnabled() {
     NSDictionary *prefs = loadPrefs();
     return prefs[@"isCellBlurTintEnabled"] ? [prefs[@"isCellBlurTintEnabled"] boolValue] : NO;
 }
+
 BOOL isiOS17OrHigher() {
     NSOperatingSystemVersion iOS17 = {17, 0, 0};
     return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS17];
 }
 
+BOOL isiOS15() {
+    NSOperatingSystemVersion iOS15 = {15, 0, 0};
+    NSOperatingSystemVersion iOS16 = {16, 0, 0};
+    return [[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS15] &&
+           ![[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:iOS16];
+}
+
+static void updateDarkModeFromTraits(UITraitCollection *tc) {
+    if (@available(iOS 13.0, *)) {
+        gWAMIsDarkModeOnIOS15 = (tc.userInterfaceStyle == UIUserInterfaceStyleDark);
+    }
+}
+
 BOOL isDarkMode() {
     if (@available(iOS 13.0, *)) {
+        if (isiOS15()) {
+            UIUserInterfaceStyle screenStyle = [UIScreen mainScreen].traitCollection.userInterfaceStyle;
+            if (screenStyle != UIUserInterfaceStyleUnspecified) {
+                return screenStyle == UIUserInterfaceStyleDark;
+            }
+            return gWAMIsDarkModeOnIOS15;
+        }
         return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
     }
     return NO;
@@ -228,7 +275,7 @@ CGFloat getChatImageBlurAmount() {
     Helper and Getter Functions
 =================================*/
 
-static UIColor *getSystemTintColor(); //forward decl
+static UIColor *getSystemTintColor();
 
 UIColor *colorFromHex(NSString *hexString) {
     if (!hexString || [hexString length] == 0) return nil;
@@ -334,7 +381,6 @@ static BOOL isAdvancedTintEnabled() {
     return prefs[@"isAdvancedTintEnabled"] ? [prefs[@"isAdvancedTintEnabled"] boolValue] : NO;
 }
 
-
 static UIColor *getAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
     if (!isAdvancedTintEnabled()) return fallback;
     NSDictionary *prefs = loadPrefs();
@@ -360,20 +406,43 @@ static UIColor *getAdvancedTintColorForView(NSString *lightKey, NSString *darkKe
 static UIColor *getAdvancedUnreadDotColor() {
     return getAdvancedTintColor(@"advancedUnreadDotColor", @"advancedUnreadDotColorDark", getSystemTintColor());
 }
+
 static UIColor *getAdvancedSwitchTintColor() {
     return getAdvancedTintColor(@"advancedSwitchTintColor", @"advancedSwitchTintColorDark", getSystemTintColor());
 }
+
 static UIColor *getAdvancedSearchFieldColor() {
     return getAdvancedTintColor(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark", getSystemTintColor());
 }
+
 static UIColor *getAdvancedStatusCellColor() {
     return getAdvancedTintColor(@"advancedStatusCellColor", @"advancedStatusCellColorDark", getSystemTintColor());
 }
+
 static UIColor *getAdvancedTableLabelColor() {
     return getAdvancedTintColor(@"advancedTableLabelColor", @"advancedTableLabelColorDark", getSystemTintColor());
 }
+
 static UIColor *getAdvancedReactionGlyphColor() {
     return getAdvancedTintColor(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark", getSystemTintColor());
+}
+
+static UIColor *getGlyphTintColor(void) {
+    NSDictionary *prefs = loadPrefs();
+    NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
+    if (isAdvancedTintEnabled() && prefs[key]) {
+        UIColor *explicit = colorFromHex(prefs[key]);
+        if (explicit) return explicit;
+    }
+
+    UIColor *base = getSystemTintColor();
+    if (!base) return [UIColor colorWithWhite:0.85 alpha:1.0];
+
+    CGFloat h, s, b, a;
+    if (![base getHue:&h saturation:&s brightness:&b alpha:&a]) return base;
+    s *= 0.875;
+    b = MIN(1.0, b + 0.15);
+    return [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
 }
 
 UIBlurEffectStyle getInputFieldBlurStyle() {
@@ -385,6 +454,30 @@ UIBlurEffectStyle getInputFieldBlurStyle() {
     if ([style isEqualToString:@"ultraThinLight"]) return UIBlurEffectStyleSystemUltraThinMaterialLight;
     if ([style isEqualToString:@"ultraThinDark"]) return UIBlurEffectStyleSystemUltraThinMaterialDark;
     return UIBlurEffectStyleRegular;
+}
+
+static BOOL isTextViewSafeForColorWrite(UITextView *tv) {
+    if (!tv) return NO;
+    NSAttributedString *attr = tv.attributedText;
+    if (attr.length == 0) return YES;
+    __block BOOL hasAttachment = NO;
+    [attr enumerateAttribute:NSAttachmentAttributeName
+                     inRange:NSMakeRange(0, attr.length)
+                     options:0
+                  usingBlock:^(id value, NSRange range, BOOL *stop) {
+        if ([value isKindOfClass:[NSTextAttachment class]]) {
+            hasAttachment = YES;
+            *stop = YES;
+        }
+    }];
+    return !hasAttachment;
+}
+
+static void applyInputTextColor(UITextView *tv, UIColor *color) {
+    if (!tv || !color) return;
+
+    if (!isTextViewSafeForColorWrite(tv)) return;
+    tv.textColor = color;
 }
 
 static NSString *getConversationListTitle() {
@@ -444,21 +537,59 @@ static void invalidateConvImageCache() {
     _cachedBlurredConvImageWasDark = NO;
 }
 
-
 void applyCustomTextColors(UIView *view) {
-    if (!isCustomTextColorsEnabled()) return;
+    BOOL enabled = isCustomTextColorsEnabled();
 
     if ([view isKindOfClass:%c(CKLabel)]) {
-        ((UILabel *)view).textColor = getTitleTextColor();
-    } else if ([view isKindOfClass:%c(CKDateLabel)]) {
-        ((UILabel *)view).textColor = getDateTimeTextColor();
+        UILabel *label = (UILabel *)view;
+        UIColor *custom = enabled ? getTitleTextColor() : nil;
+        if (custom) {
+            if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            label.textColor = custom;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+            if (orig && orig != [NSNull null]) label.textColor = orig;
+        }
+    } else if ([view isKindOfClass:%c(CKDateLabel)] || [view isKindOfClass:%c(UIDateLabel)]) {
+        UILabel *label = (UILabel *)view;
+        UIColor *custom = enabled ? getDateTimeTextColor() : nil;
+        if (custom) {
+            if (!objc_getAssociatedObject(label, &kWAMOrigDateColorKey)) {
+                objc_setAssociatedObject(label, &kWAMOrigDateColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            label.textColor = custom;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMOrigDateColorKey);
+            if (orig && orig != [NSNull null]) label.textColor = orig;
+        }
     } else if ([view isKindOfClass:[UILabel class]]) {
-        ((UILabel *)view).textColor = getMessagePreviewTextColor();
+        UILabel *label = (UILabel *)view;
+        UIColor *custom = enabled ? getMessagePreviewTextColor() : nil;
+        if (custom) {
+            if (!objc_getAssociatedObject(label, &kWAMOrigPreviewColorKey)) {
+                objc_setAssociatedObject(label, &kWAMOrigPreviewColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            label.textColor = custom;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMOrigPreviewColorKey);
+            if (orig && orig != [NSNull null]) label.textColor = orig;
+        }
     } else if ([view isKindOfClass:[UIImageView class]]) {
         UIImageView *imageView = (UIImageView *)view;
         if (imageView.image.renderingMode == UIImageRenderingModeAlwaysTemplate ||
             imageView.image.renderingMode == UIImageRenderingModeAutomatic) {
-            imageView.tintColor = getDateTimeTextColor();
+            UIColor *custom = enabled ? getDateTimeTextColor() : nil;
+            if (custom) {
+                if (!objc_getAssociatedObject(imageView, &kWAMOrigTintColorKey)) {
+                    objc_setAssociatedObject(imageView, &kWAMOrigTintColorKey, imageView.tintColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                imageView.tintColor = custom;
+            } else {
+                id orig = objc_getAssociatedObject(imageView, &kWAMOrigTintColorKey);
+                if (orig && orig != [NSNull null]) imageView.tintColor = orig;
+            }
         }
     }
 
@@ -490,7 +621,6 @@ static UIColor *getReceivedTextColor() {
     NSString *key = isDarkMode() ? @"receivedTextColorDark" : @"receivedTextColor";
     return colorFromHex(prefs[key]);
 }
-
 
 static UIColor *getSentTextColor() {
     NSDictionary *prefs = loadPrefs();
@@ -599,10 +729,227 @@ static UIColor *getSendButtonColor() {
     return colorFromHex(prefs[key]) ?: [UIColor systemBlueColor];
 }
 
+/*=======================
+    Changelog Splash
+=======================*/
+
+static BOOL shouldShowChangelog(void) {
+    NSDictionary *prefs = loadPrefs();
+    NSString *lastSeen = prefs[@"lastSeenChangelogVersion"];
+    return !lastSeen || ![lastSeen isEqualToString:kWAMTweakVersion];
+}
+
+static void markChangelogSeen(void) {
+    NSString *path = kPrefsPlistPathRootless;
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+    if (!prefs) prefs = [NSMutableDictionary new];
+    prefs[@"lastSeenChangelogVersion"] = kWAMTweakVersion;
+    [prefs writeToFile:path atomically:YES];
+    refreshPrefs();
+}
+
+@interface WAMChangelogViewController : UIViewController <UIAdaptivePresentationControllerDelegate>
+@end
+
+@implementation WAMChangelogViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor systemBackgroundColor];
+
+    UIColor *brandColor = colorFromHex(@"89EED3") ?: [UIColor systemBlueColor];
+
+    UIImageView *iconView = [[UIImageView alloc] init];
+    iconView.contentMode = UIViewContentModeScaleAspectFit;
+    iconView.layer.cornerRadius = 18;
+    iconView.layer.masksToBounds = YES;
+    iconView.translatesAutoresizingMaskIntoConstraints = NO;
+    NSArray *iconPaths = @[
+        @"/var/jb/Library/PreferenceBundles/WhatAMessPrefs.bundle/icon@3x.png",
+        @"/Library/PreferenceBundles/WhatAMessPrefs.bundle/icon@3x.png",
+    ];
+    for (NSString *p in iconPaths) {
+        NSData *data = [NSData dataWithContentsOfFile:p];
+        if (data) { iconView.image = [UIImage imageWithData:data scale:3.0]; break; }
+    }
+    [self.view addSubview:iconView];
+
+    UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.text = kWAMChangelogTitle;
+    titleLabel.font = [UIFont systemFontOfSize:29 weight:UIFontWeightBold];
+    titleLabel.textAlignment = NSTextAlignmentCenter;
+    titleLabel.numberOfLines = 0;
+    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:titleLabel];
+
+    UILabel *versionLabel = [[UILabel alloc] init];
+    versionLabel.text = [NSString stringWithFormat:@"Version %@", kWAMTweakVersion];
+    versionLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    versionLabel.textColor = [UIColor secondaryLabelColor];
+    versionLabel.textAlignment = NSTextAlignmentCenter;
+    versionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:versionLabel];
+
+    UIScrollView *scroll = [[UIScrollView alloc] init];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scroll];
+
+    UIStackView *content = [[UIStackView alloc] init];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.alignment = UIStackViewAlignmentFill;
+    content.spacing = 8;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:content];
+
+    UIFont *headerFont = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+    UIFont *bodyFont = [UIFont systemFontOfSize:17];
+    UIFont *closingFont = [UIFont systemFontOfSize:15 weight:UIFontWeightMedium];
+    UIFont *quoteFont = [UIFont italicSystemFontOfSize:14];
+
+    NSMutableParagraphStyle *bulletStyle = [[NSMutableParagraphStyle alloc] init];
+    bulletStyle.paragraphSpacing = 8;
+    NSDictionary *bulletAttrs = @{
+        NSFontAttributeName: bodyFont,
+        NSForegroundColorAttributeName: [UIColor labelColor],
+        NSParagraphStyleAttributeName: bulletStyle,
+    };
+
+    void (^addHeader)(NSString *, BOOL) = ^(NSString *text, BOOL extraTop) {
+        UILabel *l = [[UILabel alloc] init];
+        l.text = text;
+        l.font = headerFont;
+        l.numberOfLines = 0;
+        [content addArrangedSubview:l];
+        if (extraTop) [content setCustomSpacing:18 afterView:content.arrangedSubviews[content.arrangedSubviews.count - 2]];
+        [content setCustomSpacing:6 afterView:l];
+    };
+    void (^addBullets)(NSString *) = ^(NSString *text) {
+        UILabel *l = [[UILabel alloc] init];
+        l.numberOfLines = 0;
+        l.attributedText = [[NSAttributedString alloc] initWithString:text attributes:bulletAttrs];
+        [content addArrangedSubview:l];
+    };
+
+    addHeader(@"New Features", NO);
+    addBullets(@"• Added iOS 15 Support\n• Added color tinting to Modern NavBar and Modern MessageBar\n• This splash screen!");
+
+    addHeader(@"Bug Fixes/Changes", YES);
+    addBullets(@"• Fixed a bug where haptic/3D touching to preview a chat didn't show the selected background.\n• Made preferences automatically select the user's active light/dark mode upon first setting up the tweak.\n• And numerous more fixes for iOS 15 and all versions!");
+
+    UILabel *thanks = [[UILabel alloc] init];
+    thanks.text = @"A huge thanks to user Deakula for testing and providing crucial feedback to get this tweak on iOS 15!";
+    thanks.font = [UIFont systemFontOfSize:15];
+    thanks.textColor = [UIColor secondaryLabelColor];
+    thanks.textAlignment = NSTextAlignmentCenter;
+    thanks.numberOfLines = 0;
+    [content addArrangedSubview:thanks];
+    [content setCustomSpacing:24 afterView:content.arrangedSubviews[content.arrangedSubviews.count - 2]];
+
+    UILabel *closing = [[UILabel alloc] init];
+    closing.text = @"View the full changelog on GitHub";
+    closing.font = closingFont;
+    closing.textColor = [UIColor secondaryLabelColor];
+    closing.textAlignment = NSTextAlignmentCenter;
+    closing.numberOfLines = 0;
+    closing.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UILabel *quote = [[UILabel alloc] init];
+    quote.text = @"UIVisualEffectView my beloved";
+    quote.font = quoteFont;
+    quote.textColor = [UIColor tertiaryLabelColor];
+    quote.textAlignment = NSTextAlignmentCenter;
+    quote.numberOfLines = 0;
+    quote.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIStackView *footer = [[UIStackView alloc] initWithArrangedSubviews:@[closing, quote]];
+    footer.axis = UILayoutConstraintAxisVertical;
+    footer.alignment = UIStackViewAlignmentFill;
+    footer.spacing = 6;
+    footer.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:footer];
+
+    UIButton *githubBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [githubBtn setTitle:@"GitHub" forState:UIControlStateNormal];
+    [githubBtn setTitleColor:brandColor forState:UIControlStateNormal];
+    githubBtn.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    githubBtn.backgroundColor = [UIColor tertiarySystemFillColor];
+    githubBtn.layer.cornerRadius = 14;
+    [githubBtn addTarget:self action:@selector(gitHubTapped) forControlEvents:UIControlEventTouchUpInside];
+
+    UIButton *dismiss = [UIButton buttonWithType:UIButtonTypeSystem];
+    [dismiss setTitle:@"Got It" forState:UIControlStateNormal];
+    [dismiss setTitleColor:[UIColor blackColor] forState:UIControlStateNormal];
+    dismiss.titleLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    dismiss.backgroundColor = brandColor;
+    dismiss.layer.cornerRadius = 14;
+    [dismiss addTarget:self action:@selector(dismissTapped) forControlEvents:UIControlEventTouchUpInside];
+
+    UIStackView *buttonRow = [[UIStackView alloc] initWithArrangedSubviews:@[githubBtn, dismiss]];
+    buttonRow.axis = UILayoutConstraintAxisHorizontal;
+    buttonRow.distribution = UIStackViewDistributionFillEqually;
+    buttonRow.spacing = 12;
+    buttonRow.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:buttonRow];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [iconView.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:24],
+        [iconView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [iconView.widthAnchor constraintEqualToConstant:72],
+        [iconView.heightAnchor constraintEqualToConstant:72],
+
+        [titleLabel.topAnchor constraintEqualToAnchor:iconView.bottomAnchor constant:14],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [titleLabel.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+
+        [versionLabel.topAnchor constraintEqualToAnchor:titleLabel.bottomAnchor constant:4],
+        [versionLabel.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [versionLabel.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+
+        [scroll.topAnchor constraintEqualToAnchor:versionLabel.bottomAnchor constant:24],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+        [scroll.bottomAnchor constraintEqualToAnchor:footer.topAnchor constant:-16],
+
+        [content.topAnchor constraintEqualToAnchor:scroll.topAnchor],
+        [content.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor],
+        [content.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor],
+        [content.bottomAnchor constraintEqualToAnchor:scroll.bottomAnchor],
+        [content.widthAnchor constraintEqualToAnchor:scroll.widthAnchor],
+
+        [footer.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [footer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+        [footer.bottomAnchor constraintEqualToAnchor:buttonRow.topAnchor constant:-16],
+
+        [buttonRow.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:24],
+        [buttonRow.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-24],
+        [buttonRow.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-20],
+        [buttonRow.heightAnchor constraintEqualToConstant:52],
+    ]];
+}
+
+- (void)gitHubTapped {
+    NSURL *url = [NSURL URLWithString:kWAMGitHubURL];
+    if (url) [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+}
+
+- (void)dismissTapped {
+    markChangelogSeen();
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    markChangelogSeen();
+}
+
+@end
+
 /*============
-==============
     HOOKS
-==============
 ============*/
 
 %hook UIView
@@ -652,8 +999,17 @@ static UIColor *getSendButtonColor() {
         levels++;
     }
 
+    if (!isCustomBubbleColorsEnabled()) {
+        UIView *p = self.superview;
+        int l = 0;
+        while (p && l < 5) {
+            if ([p isKindOfClass:%c(CKAggregateAcknowledgmentBalloonView)]) return %orig;
+            p = p.superview;
+            l++;
+        }
+    }
+
     if (isAdvancedTintEnabled()) {
-        // Check for reaction balloon context
         UIColor *balloonColor = getAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
         if (balloonColor) {
             UIView *p = self.superview;
@@ -667,7 +1023,6 @@ static UIColor *getSendButtonColor() {
             }
         }
 
-        // Check for CNActionView context
         UIColor *contactActionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
         if (contactActionColor) {
             UIView *p = self.superview;
@@ -681,7 +1036,6 @@ static UIColor *getSendButtonColor() {
             }
         }
 
-        // Check for nav bar / contact action button context
         UIColor *navButtonColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self);
         if (navButtonColor) {
             UIView *p = self.superview;
@@ -738,6 +1092,45 @@ static UIColor *getSendButtonColor() {
 
 %hook CKConversationListCollectionViewController
 
+-(void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15()) return;
+    [self applyCustomNavTitle];
+}
+
+-(void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!isTweakEnabled() || gWAMChangelogShownThisLaunch) return;
+    if (!shouldShowChangelog()) return;
+    gWAMChangelogShownThisLaunch = YES;
+
+    WAMChangelogViewController *vc = [WAMChangelogViewController new];
+    vc.modalPresentationStyle = UIModalPresentationPageSheet;
+    vc.presentationController.delegate = vc;
+    [self presentViewController:vc animated:YES completion:nil];
+}
+
+%new
+-(void)applyCustomNavTitle {
+    NSString *title = getConversationListTitle();
+    UIColor *titleColor = getConversationListTitleColor();
+
+    self.navigationItem.title = title;
+
+    if (self.navigationController) {
+        if (titleColor) {
+            NSDictionary *attrs = @{ NSForegroundColorAttributeName: titleColor };
+            self.navigationController.navigationBar.titleTextAttributes = attrs;
+            self.navigationController.navigationBar.largeTitleTextAttributes = attrs;
+        } else {
+            // No custom color for this mode — clear our attributes so the system defaults take over.
+            self.navigationController.navigationBar.titleTextAttributes = nil;
+            self.navigationController.navigationBar.largeTitleTextAttributes = nil;
+        }
+    }
+}
+
+
 -(void)viewDidLoad {
     %orig;
     if (!isTweakEnabled()) return;
@@ -765,26 +1158,37 @@ static UIColor *getSendButtonColor() {
     [self updateAllColors];
     [self.collectionView reloadData];
     [self.collectionView layoutIfNeeded];
-    
-    NSString *title = getConversationListTitle();
-    
-    self.navigationItem.title = @"";
-    dispatch_async(dispatch_get_main_queue(), ^{
-        self.navigationItem.title = title;
-        
-        for (UIView *subview in self.navigationController.navigationBar.subviews) {
-            [subview setNeedsLayout];
-            [subview layoutIfNeeded];
-        }
-    });
+
+    if (isiOS15()) {
+        [self applyCustomNavTitle];
+    } else {
+        NSString *title = getConversationListTitle();
+        self.navigationItem.title = @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.navigationItem.title = title;
+            for (UIView *subview in self.navigationController.navigationBar.subviews) {
+                [subview setNeedsLayout];
+                [subview layoutIfNeeded];
+            }
+        });
+    }
 }
 
 %new
 -(void)applyCustomColorsToCKLabelsInView:(UIView *)view {
-    if (!isCustomTextColorsEnabled()) return;
+    UIColor *custom = isCustomTextColorsEnabled() ? getTitleTextColor() : nil;
     for (UIView *subview in view.subviews) {
         if ([subview isKindOfClass:%c(CKLabel)]) {
-            ((CKLabel *)subview).textColor = getTitleTextColor();
+            UILabel *label = (UILabel *)subview;
+            if (custom) {
+                if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                    objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                label.textColor = custom;
+            } else {
+                id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+                if (orig && orig != [NSNull null]) label.textColor = orig;
+            }
         }
         [self applyCustomColorsToCKLabelsInView:subview];
     }
@@ -960,10 +1364,13 @@ static UIColor *getSendButtonColor() {
         }
         superview = superview.superview;
     }
+
     if (isInConversationCell) {
         if ([self isKindOfClass:%c(CKLabel)]) {
             %orig(getTitleTextColor());
         } else if ([self isKindOfClass:%c(CKDateLabel)]) {
+            %orig(getDateTimeTextColor());
+        } else if ([self isKindOfClass:%c(UIDateLabel)]) {
             %orig(getDateTimeTextColor());
         } else if ([self isKindOfClass:[UILabel class]]) {
             %orig(getMessagePreviewTextColor());
@@ -1097,6 +1504,12 @@ static UIColor *getSendButtonColor() {
         return;
     }
 
+    if (self.tag == 88771) {
+        UIColor *dotColor = getAdvancedUnreadDotColor();
+        %orig(dotColor ?: color);
+        return;
+    }
+
     UIView *superview = self.superview;
     BOOL isInConversationCell = NO;
     while (superview) {
@@ -1120,7 +1533,8 @@ static UIColor *getSendButtonColor() {
     int levels = 0;
 
     while (parent && levels < 10) {
-        if (levels < 5 && [parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)]) {
+        if (levels < 5 && ([parent isKindOfClass:%c(CKConversationListEmbeddedStandardTableViewCell)] ||
+                           (isiOS15() && [parent isKindOfClass:%c(CKConversationListCollectionViewConversationCell)]))) {
             isUnreadIndicator = YES;
             break;
         }
@@ -1135,8 +1549,8 @@ static UIColor *getSendButtonColor() {
             if (customTint) {
                 UIImage *tintedImage = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                 %orig(tintedImage);
-                self.tintColor = customTint;
                 self.tag = 88771;
+                self.tintColor = customTint;
             }
         }
         return;
@@ -1219,7 +1633,16 @@ static UIColor *getSendButtonColor() {
             [CATransaction commit];
         } else {
             [self createOurBlur];
+            for (UIView *sub in self.subviews) {
+                if ([sub isKindOfClass:[UIVisualEffectView class]] &&
+                    [sub.layer.mask isKindOfClass:[CAGradientLayer class]]) {
+                    ourBlur = (UIVisualEffectView *)sub;
+                    break;
+                }
+            }
         }
+
+        if (ourBlur) [self applyModernTintOverlay:ourBlur];
 
         self.backgroundColor = [UIColor clearColor];
         return;
@@ -1264,7 +1687,7 @@ static UIColor *getSendButtonColor() {
                 [blurView.contentView addSubview:tintOverlay];
             }
 
-            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+            tintOverlay.backgroundColor = tintColor;
             tintOverlay.frame = blurView.contentView.bounds;
         }
     }
@@ -1374,6 +1797,37 @@ static UIColor *getSendButtonColor() {
 }
 
 %new
+- (void)applyModernTintOverlay:(UIVisualEffectView *)blurView {
+    static NSInteger const kModernTintOverlayTag = 88991;
+
+    UIView *existingOverlay = nil;
+    for (UIView *sub in blurView.contentView.subviews) {
+        if (sub.tag == kModernTintOverlayTag) { existingOverlay = sub; break; }
+    }
+
+    if (!isNavBarCustomizationEnabled()) {
+        if (existingOverlay) [existingOverlay removeFromSuperview];
+        return;
+    }
+
+    UIColor *tintColor = getNavBarTintColor();
+    if (!tintColor) {
+        if (existingOverlay) [existingOverlay removeFromSuperview];
+        return;
+    }
+
+    if (!existingOverlay) {
+        existingOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
+        existingOverlay.tag = kModernTintOverlayTag;
+        existingOverlay.userInteractionEnabled = NO;
+        existingOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [blurView.contentView addSubview:existingOverlay];
+    }
+    existingOverlay.backgroundColor = tintColor;
+    existingOverlay.frame = blurView.contentView.bounds;
+}
+
+%new
 - (void)handleNavBarPrefsChanged {
     refreshPrefs();
     [self setNeedsLayout];
@@ -1462,28 +1916,30 @@ static UIColor *getSendButtonColor() {
     if (!isTweakEnabled()) return;
 
     NSString *conversationListTitle = getConversationListTitle();
+    UIColor *titleColor = getConversationListTitleColor();
+    BOOL ctcEnabled = isCustomTextColorsEnabled();
+    UIColor *otherColor = ctcEnabled ? getTitleTextColor() : nil;
+
+    void (^handle)(UILabel *) = ^(UILabel *label) {
+        BOOL isTitleLabel = [label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle];
+        UIColor *target = isTitleLabel ? titleColor : otherColor;
+        if (isTitleLabel) label.text = conversationListTitle;
+        if (target) {
+            if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            label.textColor = target;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+            if (orig && orig != [NSNull null]) label.textColor = orig;
+        }
+    };
 
     for (UIView *sub in self.subviews) {
-        if ([sub isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)sub;
-            if ([label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle]) {
-                label.text = conversationListTitle;
-                label.textColor = getConversationListTitleColor();
-            } else if (isCustomTextColorsEnabled()) {
-                label.textColor = getTitleTextColor();
-            }
-        }
+        if ([sub isKindOfClass:[UILabel class]]) handle((UILabel *)sub);
         if ([sub isKindOfClass:[UIView class]]) {
             for (UIView *subview in sub.subviews) {
-                if ([subview isKindOfClass:[UILabel class]]) {
-                    UILabel *label = (UILabel *)subview;
-                    if ([label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle]) {
-                        label.text = conversationListTitle;
-                        label.textColor = getConversationListTitleColor();
-                    } else if (isCustomTextColorsEnabled()) {
-                        label.textColor = getTitleTextColor();
-                    }
-                }
+                if ([subview isKindOfClass:[UILabel class]]) handle((UILabel *)subview);
             }
         }
     }
@@ -1557,6 +2013,16 @@ static UIColor *getSendButtonColor() {
     %orig;
     if (!isTweakEnabled()) return;
     [self applyPinnedGlow];
+
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+            selector:@selector(handlePinnedGlowPrefsChanged)
+            name:kPrefsChangedNotification
+            object:nil];
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    }
 }
 
 - (void)layoutSubviews {
@@ -1565,13 +2031,34 @@ static UIColor *getSendButtonColor() {
     [self applyPinnedGlow];
 }
 
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
+}
+
+%new
+- (void)handlePinnedGlowPrefsChanged {
+    refreshPrefs();
+    if (isPinnedGlowEnabled()) {
+        [self applyPinnedGlow];
+    } else {
+        for (UIView *sub in self.subviews) {
+            if (![sub isKindOfClass:[UIImageView class]]) continue;
+            UIImageView *img = (UIImageView *)sub;
+            img.hidden = NO;
+            img.alpha = 1.0;
+        }
+    }
+}
+
 %new
 - (void)applyPinnedGlow {
+    if (!isPinnedGlowEnabled()) return;
     for (UIView *sub in self.subviews) {
         if (![sub isKindOfClass:[UIImageView class]]) continue;
         UIImageView *img = (UIImageView *)sub;
-        img.hidden = isPinnedGlowEnabled();
-        img.alpha = isPinnedGlowEnabled() ? 1.0 : 0.0;
+        img.hidden = YES;
+        img.alpha = 0.0;
     }
 }
 
@@ -1745,10 +2232,16 @@ static UIColor *getSendButtonColor() {
     if (!isTweakEnabled()) return;
     if (@available(iOS 13.0, *)) {
         if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
             refreshPrefs();
             [self updateChatBackground];
         }
     }
+}
+
+-(void)viewWillAppear:(BOOL)animated {
+    %orig;
+    if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
 }
 
 -(void)dealloc {
@@ -1814,31 +2307,47 @@ static UIColor *getSendButtonColor() {
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
     if ([self isKindOfClass:%c(CKColoredBalloonView)]) {
         CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
+        // Pick the right color for ALL types — previously sent/sms fell through to %orig
+        // untouched, which is why the new sent bubble flashed system blue during its send
+        // animation (the bubble image is on the balloon itself for the new outgoing message).
+        UIColor *targetColor = nil;
+        BOOL applyReceivedInsets = NO;
         if (coloredSelf.color == -1) {
-            UIColor *receivedColor = getReceivedBubbleColor();
-            if (receivedColor) {
-                UIImageRenderingMode originalMode = image.renderingMode;
-                UIEdgeInsets capInsets = image.capInsets;
-                UIImageResizingMode resizingMode = image.resizingMode;
-                UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
-                CGFloat scale = image.scale;
+            targetColor = getReceivedBubbleColor();
+            applyReceivedInsets = YES;
+        } else if (coloredSelf.color == 1) {
+            targetColor = getSentBubbleColor();
+        } else if (coloredSelf.color == 0) {
+            targetColor = getSMSSentBubbleColor();
+        }
+        if (targetColor) {
+            UIImageRenderingMode originalMode = image.renderingMode;
+            UIEdgeInsets capInsets = image.capInsets;
+            UIImageResizingMode resizingMode = image.resizingMode;
+            UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
+            CGFloat scale = image.scale;
 
-                UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
-                CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
-                [image drawInRect:rect];
-                [receivedColor setFill];
-                UIRectFillUsingBlendMode(rect, kCGBlendModeSourceAtop);
-                UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
-                UIGraphicsEndImageContext();
+            UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
+            CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
+            [image drawInRect:rect];
+            CGContextRef context = UIGraphicsGetCurrentContext();
+            CGContextSetBlendMode(context, kCGBlendModeSourceIn);
+            [targetColor setFill];
+            CGContextFillRect(context, rect);
+            UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
 
+            // The +6/-8 alignment tweak is specific to received bubbles (tail on left);
+            // applying it to sent would shift the bubble's text incorrectly.
+            if (applyReceivedInsets) {
                 alignmentInsets.left += 6.0;
                 alignmentInsets.right -= 8.0;
-                tintedImage = [tintedImage resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
-                tintedImage = [tintedImage imageWithAlignmentRectInsets:alignmentInsets];
-                tintedImage = [tintedImage imageWithRenderingMode:originalMode];
-                %orig(tintedImage);
-                return;
             }
+            tintedImage = [tintedImage resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
+            tintedImage = [tintedImage imageWithAlignmentRectInsets:alignmentInsets];
+            tintedImage = [tintedImage imageWithRenderingMode:originalMode];
+            %orig(tintedImage);
+            return;
         }
     }
     %orig;
@@ -2057,16 +2566,26 @@ static UIColor *getSendButtonColor() {
     UIVisualEffectView *effectView = nil;
     BOOL isInMessageInput = NO;
     BOOL isInKeyboard = NO;
+    BOOL isInAudioRecording = NO;
     int levels = 0;
 
     while (parent && levels < 15) {
-        if ([parent isKindOfClass:[UIVisualEffectView class]] && !effectView) {
+         if ([parent isKindOfClass:[UIVisualEffectView class]] && !effectView) {
+            if (objc_getAssociatedObject(parent, &kWAMInputFieldBlurKey)) return;
             effectView = (UIVisualEffectView *)parent;
         }
         if ([parent isKindOfClass:%c(UIKBVisualEffectView)] ||
+            [parent isKindOfClass:%c(UIKBBackdropView)] ||
             [parent isKindOfClass:%c(UIInputView)] ||
             [NSStringFromClass([parent class]) containsString:@"Keyboard"]) {
             isInKeyboard = YES;
+            break;
+        }
+        NSString *parentClassName = NSStringFromClass([parent class]);
+        if ([parentClassName containsString:@"Audio"] ||
+            [parentClassName containsString:@"Recording"] ||
+            [parentClassName containsString:@"Waveform"]) {
+            isInAudioRecording = YES;
             break;
         }
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) isInMessageInput = YES;
@@ -2088,6 +2607,7 @@ static UIColor *getSendButtonColor() {
         levels++;
     }
     if (isInActionView && isInContactView) { self.hidden = YES; return; }
+    if (isInAudioRecording && isiOS15()) return;
 
     if (!isInMessageInput || isInKeyboard || !effectView) return;
 
@@ -2099,13 +2619,20 @@ static UIColor *getSendButtonColor() {
         self.opaque = NO;
         if (!effectView.effect) effectView.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
 
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        CGRect expandedFrame = effectView.frame;
-        expandedFrame.origin.y -= 70;
-        expandedFrame.size.height += 70;
-        effectView.frame = expandedFrame;
-        [CATransaction commit];
+        CGFloat const kWAMBarExpansion = 110;
+        NSNumber *lastExpandedH = objc_getAssociatedObject(effectView, &kWAMEffectExpandedKey);
+        CGFloat curH = effectView.frame.size.height;
+        BOOL needsExpand = !lastExpandedH || curH < lastExpandedH.floatValue - (kWAMBarExpansion / 2);
+        if (needsExpand) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            CGRect expandedFrame = effectView.frame;
+            expandedFrame.origin.y -= kWAMBarExpansion;
+            expandedFrame.size.height += kWAMBarExpansion;
+            effectView.frame = expandedFrame;
+            [CATransaction commit];
+            objc_setAssociatedObject(effectView, &kWAMEffectExpandedKey, @(expandedFrame.size.height), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
 
         self.alpha = 1.0;
         CAGradientLayer *maskLayer = [CAGradientLayer layer];
@@ -2119,6 +2646,37 @@ static UIColor *getSendButtonColor() {
         ];
         maskLayer.locations = @[@0.0, @0.3, @0.6, @0.85, @1.0];
         self.layer.mask = maskLayer;
+
+        static NSString * const kWAMModernMsgBarTintName = @"wamModernMsgBarTint";
+        CALayer *tintLayer = nil;
+        for (CALayer *sublayer in self.layer.sublayers) {
+            if ([sublayer.name isEqualToString:kWAMModernMsgBarTintName]) { tintLayer = sublayer; break; }
+        }
+        UIColor *msgBarTint = isMessageBarCustomizationEnabled() ? getMessageBarTintColor() : nil;
+        if (msgBarTint) {
+            if (!tintLayer) {
+                tintLayer = [CALayer layer];
+                tintLayer.name = kWAMModernMsgBarTintName;
+                [self.layer addSublayer:tintLayer];
+            }
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            tintLayer.frame = self.bounds;
+            tintLayer.backgroundColor = msgBarTint.CGColor;
+            [CATransaction commit];
+        } else if (tintLayer) {
+            [tintLayer removeFromSuperlayer];
+        }
+        return;
+    }
+
+    if (isiOS15() && effectView && (!isMessageBarCustomizationEnabled() || !getMessageBarTintColor())) {
+        NSMutableArray *stale = [NSMutableArray array];
+        for (UIView *sub in effectView.contentView.subviews) {
+            if ([sub class] == [UIView class] && sub.backgroundColor) [stale addObject:sub];
+        }
+        for (UIView *sub in stale) [sub removeFromSuperview];
+        self.layer.mask = nil;
         return;
     }
 
@@ -2136,14 +2694,22 @@ static UIColor *getSendButtonColor() {
 
     if (effectView) {
         UIView *tintOverlay = nil;
-        for (UIView *contentSubview in effectView.contentView.subviews) {
-            if ([contentSubview class] == [UIView class] && contentSubview.backgroundColor) {
-                CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
-                if ([contentSubview.backgroundColor getRed:&r1 green:&g1 blue:&b1 alpha:&a1] &&
-                    [tintColor getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
-                    if (fabs(r1-r2)<0.01 && fabs(g1-g2)<0.01 && fabs(b1-b2)<0.01) {
-                        tintOverlay = contentSubview;
-                        break;
+        if (isiOS15()) {
+            NSMutableArray *stale = [NSMutableArray array];
+            for (UIView *sub in effectView.contentView.subviews) {
+                if ([sub class] == [UIView class] && sub.backgroundColor) [stale addObject:sub];
+            }
+            for (UIView *sub in stale) [sub removeFromSuperview];
+        } else {
+            for (UIView *contentSubview in effectView.contentView.subviews) {
+                if ([contentSubview class] == [UIView class] && contentSubview.backgroundColor) {
+                    CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+                    if ([contentSubview.backgroundColor getRed:&r1 green:&g1 blue:&b1 alpha:&a1] &&
+                        [tintColor getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
+                        if (fabs(r1-r2)<0.01 && fabs(g1-g2)<0.01 && fabs(b1-b2)<0.01) {
+                            tintOverlay = contentSubview;
+                            break;
+                        }
                     }
                 }
             }
@@ -2154,7 +2720,7 @@ static UIColor *getSendButtonColor() {
             tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             [effectView.contentView addSubview:tintOverlay];
         }
-        tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+        tintOverlay.backgroundColor = tintColor;
         tintOverlay.frame = effectView.contentView.bounds;
     }
 }
@@ -2167,6 +2733,7 @@ static UIColor *getSendButtonColor() {
     UIVisualEffectView *effectView = nil;
     BOOL isInMessageInput = NO;
     BOOL isInKeyboard = NO;
+    BOOL isInAudioRecording = NO;
     int levels = 0;
 
     while (parent && levels < 15) {
@@ -2179,11 +2746,19 @@ static UIColor *getSendButtonColor() {
             isInKeyboard = YES;
             break;
         }
+        NSString *parentClassName = NSStringFromClass([parent class]);
+        if ([parentClassName containsString:@"Audio"] ||
+            [parentClassName containsString:@"Recording"] ||
+            [parentClassName containsString:@"Waveform"]) {
+            isInAudioRecording = YES;
+            break;
+        }
         if ([parent isKindOfClass:%c(CKMessageEntryView)]) isInMessageInput = YES;
         parent = parent.superview;
         levels++;
     }
 
+    if (isInAudioRecording && isiOS15()) return;
     if (!isInMessageInput || isInKeyboard || !effectView) return;
 
     effectView.opaque = NO;
@@ -2198,6 +2773,7 @@ static UIColor *getSendButtonColor() {
     UIView *parent = self.superview;
     BOOL isInMessageInput = NO;
     BOOL isInKeyboard = NO;
+    BOOL isInAudioRecording = NO;
     int levels = 0;
 
     while (parent && levels < 15) {
@@ -2208,11 +2784,18 @@ static UIColor *getSendButtonColor() {
             isInKeyboard = YES;
             break;
         }
+        if ([className containsString:@"Audio"] ||
+            [className containsString:@"Recording"] ||
+            [className containsString:@"Waveform"]) {
+            isInAudioRecording = YES;
+            break;
+        }
         if ([className isEqualToString:@"CKMessageEntryView"]) isInMessageInput = YES;
         parent = parent.superview;
         levels++;
     }
 
+    if (isInAudioRecording && isiOS15()) { %orig; return; }
     if (isInMessageInput && !isInKeyboard) { %orig([UIColor clearColor]); return; }
     %orig;
 }
@@ -2380,18 +2963,61 @@ static UIColor *getSendButtonColor() {
     }
 }
 
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15()) return;
+    if (@available(iOS 13.0, *)) {
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            updateDarkModeFromTraits(self.traitCollection);
+            refreshPrefs();
+            [self setNeedsLayoutRecursively:self];
+            [self layoutIfNeeded];
+            if (isInputFieldCustomizationEnabled()) [self applyInputFieldCustomization];
+        }
+    }
+}
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
 
     [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
 
     if (self.window) {
         [[NSNotificationCenter defaultCenter] addObserver:self
             selector:@selector(handleInputFieldPrefsChanged)
             name:kPrefsChangedNotification
             object:nil];
+        if (isiOS15()) {
+            [[NSNotificationCenter defaultCenter] addObserver:self
+                selector:@selector(handleAppDidBecomeActive)
+                name:UIApplicationDidBecomeActiveNotification
+                object:nil];
+        }
         if (isInputFieldCustomizationEnabled()) [self applyInputFieldCustomization];
+    }
+}
+
+%new
+- (void)handleAppDidBecomeActive {
+    if (!isTweakEnabled() || !isiOS15()) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.window) return;
+        refreshPrefs();
+        [strongSelf setNeedsLayoutRecursively:strongSelf];
+        [strongSelf layoutIfNeeded];
+        if (isInputFieldCustomizationEnabled()) [strongSelf applyInputFieldCustomization];
+    });
+}
+
+%new
+- (void)setNeedsLayoutRecursively:(UIView *)view {
+    [view setNeedsLayout];
+    for (UIView *sub in view.subviews) {
+        [self setNeedsLayoutRecursively:sub];
     }
 }
 
@@ -2423,6 +3049,7 @@ static UIColor *getSendButtonColor() {
         blurView.layer.cornerRadius = inputFieldContainer.layer.cornerRadius;
         blurView.layer.masksToBounds = YES;
         blurView.clipsToBounds = YES;
+        objc_setAssociatedObject(blurView, &kWAMInputFieldBlurKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [inputFieldContainer insertSubview:blurView atIndex:0];
         inputFieldContainer.backgroundColor = [getInputFieldBackgroundColor() colorWithAlphaComponent:0.3];
     } else {
@@ -2431,12 +3058,12 @@ static UIColor *getSendButtonColor() {
 
     [inputFieldContainer setNeedsLayout];
     [inputFieldContainer layoutIfNeeded];
-    
+
     if (textView && [textView isKindOfClass:%c(CKMessageEntryRichTextView)]) {
         if (isMessageInputTextEnabled()) {
-            textView.textColor = getMessageInputTextColor();
+            applyInputTextColor(textView, getMessageInputTextColor());
         }
-        
+
         for (UIView *subview in textView.subviews) {
             if ([subview isKindOfClass:[UILabel class]]) {
                 UILabel *label = (UILabel *)subview;
@@ -2514,8 +3141,7 @@ static UIColor *getSendButtonColor() {
     }
 
     if (isTweakEnabled() && isInputFieldCustomizationEnabled() && isMessageInputTextEnabled()) {
-        UIColor *customTextColor = getMessageInputTextColor();
-        if (customTextColor) self.textColor = customTextColor;
+        applyInputTextColor(self, getMessageInputTextColor());
     }
 }
 
@@ -2539,8 +3165,7 @@ static UIColor *getSendButtonColor() {
     [self setNeedsLayout];
     [self layoutIfNeeded];
     if (isMessageInputTextEnabled()) {
-        UIColor *customTextColor = getMessageInputTextColor();
-        if (customTextColor) self.textColor = customTextColor;
+        applyInputTextColor(self, getMessageInputTextColor());
     }
 }
 
@@ -2552,7 +3177,7 @@ static UIColor *getSendButtonColor() {
 - (void)setTextColor:(UIColor *)textColor {
     if (isTweakEnabled() && isInputFieldCustomizationEnabled() && isMessageInputTextEnabled()) {
         UIColor *customTextColor = getMessageInputTextColor();
-        if (customTextColor) { %orig(customTextColor); return; }
+        if (customTextColor && isTextViewSafeForColorWrite(self)) { %orig(customTextColor); return; }
     }
     %orig;
 }
@@ -2570,6 +3195,7 @@ static UIColor *getSendButtonColor() {
 %hook CKEntryViewButton
 
 static NSInteger const kArrowOverlayTag = 99881;
+static const char kWAMOriginalImageKey = 0;
 
 - (void)layoutSubviews {
     %orig;
@@ -2599,6 +3225,20 @@ static NSInteger const kArrowOverlayTag = 99881;
 
                             if (frameSize.width > 27 && frameSize.width < 28 &&
                                 frameSize.height > 27 && frameSize.height < 28) {
+                                // iOS 15: the audio-record button shares the send button's
+                                // 27.5×27.5 size, but its action target is
+                                // CKActionMenuGestureRecognizerButton rather than CKMessageEntryView.
+                                // Skip it so we don't strip its icon and force-replace it with an arrow.
+                                if (isiOS15()) {
+                                    BOOL isAudioButton = NO;
+                                    for (id target in [button allTargets]) {
+                                        if ([NSStringFromClass([target class]) containsString:@"ActionMenu"]) {
+                                            isAudioButton = YES;
+                                            break;
+                                        }
+                                    }
+                                    if (isAudioButton) continue;
+                                }
                                 if (!sendColor) continue;
                                 button.backgroundColor = sendColor;
                                 button.layer.cornerRadius = button.bounds.size.width / 2;
@@ -2631,6 +3271,7 @@ static NSInteger const kArrowOverlayTag = 99881;
                                 UIImageView *newImageView = [[UIImageView alloc] initWithImage:coloredImage];
                                 newImageView.contentMode = imageView.contentMode;
                                 newImageView.userInteractionEnabled = NO;
+                                objc_setAssociatedObject(newImageView, &kWAMOriginalImageKey, originalImage, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                                 [imageView removeFromSuperview];
 
                                 CGRect frameInButton = originalFrame;
@@ -2686,10 +3327,14 @@ static NSInteger const kArrowOverlayTag = 99881;
             }
         }
 
-        if ([subview isKindOfClass:[UIImageView class]] && subview.tag != kArrowOverlayTag && buttonColor && customizeOtherButtons) {
+        if ([subview isKindOfClass:[UIImageView class]] && subview.tag != kArrowOverlayTag) {
+            UIImage *src = objc_getAssociatedObject(subview, &kWAMOriginalImageKey);
+            if (!src) continue;
             UIImageView *imgView = (UIImageView *)subview;
-            if (imgView.image) {
-                imgView.image = [imgView.image imageWithTintColor:buttonColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+            if (buttonColor && customizeOtherButtons) {
+                imgView.image = [src imageWithTintColor:buttonColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+            } else {
+                imgView.image = src;
             }
         }
     }
@@ -2700,12 +3345,19 @@ static NSInteger const kArrowOverlayTag = 99881;
     if (!isTweakEnabled()) return;
 
     [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationDidBecomeActiveNotification object:nil];
 
     if (self.window) {
         [[NSNotificationCenter defaultCenter] addObserver:self
             selector:@selector(handleButtonPrefsChanged)
             name:kPrefsChangedNotification
             object:nil];
+        if (isiOS15()) {
+            [[NSNotificationCenter defaultCenter] addObserver:self
+                selector:@selector(handleButtonResumeActive)
+                name:UIApplicationDidBecomeActiveNotification
+                object:nil];
+        }
     }
 
     [self setNeedsLayout];
@@ -2713,10 +3365,23 @@ static NSInteger const kArrowOverlayTag = 99881;
 }
 
 %new
+- (void)handleButtonResumeActive {
+    if (!isTweakEnabled() || !isiOS15()) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.window) return;
+        refreshPrefs();
+        [strongSelf applyColorsDirectly];
+    });
+}
+
+%new
 - (void)handleButtonPrefsChanged {
     refreshPrefs();
     [self setNeedsLayout];
     [self layoutIfNeeded];
+    [self applyColorsDirectly];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -2724,9 +3389,17 @@ static NSInteger const kArrowOverlayTag = 99881;
     if (!isTweakEnabled()) return;
     if (@available(iOS 13.0, *)) {
         if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
-            ((void (*)(id, SEL))objc_msgSend)(self, NSSelectorFromString(@"applyColorsDirectly"));
+            if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
+            [self setNeedsLayout];
+            [self layoutIfNeeded];
+            [self applyColorsDirectly];
         }
     }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
 }
 
 %end
@@ -2738,6 +3411,7 @@ static NSInteger const kArrowOverlayTag = 99881;
     if (!isTweakEnabled()) return;
 
     [self updateDetailsBackground];
+    [self applyDetailsNavTitleColor];
 
     [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
@@ -2756,6 +3430,36 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)handleDetailsPrefsChanged {
     refreshPrefs();
     [self updateDetailsBackground];
+    [self applyDetailsNavTitleColor];
+}
+
+%new
+- (void)applyDetailsNavTitleColor {
+    // iOS 15: the Details nav bar title (the contact's name that appears once you scroll
+    // down). UINavigationItem.standardAppearance/etc. lets a VC override the shared
+    // nav bar's appearance for just that VC — that's exactly the per-VC scoping we want,
+    // so we don't mutate the bar's own appearance (which is shared across the nav stack).
+    if (!isiOS15() || !isCustomTextColorsEnabled()) return;
+    UIColor *titleColor = getTitleTextColor();
+    if (!titleColor) return;
+
+    UIViewController *vc = [self _viewControllerForAncestor];
+    if (!vc || ![vc.navigationItem respondsToSelector:@selector(standardAppearance)]) return;
+
+    NSDictionary *attrs = @{ NSForegroundColorAttributeName: titleColor };
+
+    // Seed from the bar's appearance if the navigationItem hasn't customized one yet,
+    // so we keep the bar's existing background/buttons and only override title color.
+    UINavigationBar *bar = vc.navigationController.navigationBar;
+    UINavigationBarAppearance *base = vc.navigationItem.standardAppearance
+        ?: (bar.standardAppearance ?: [[UINavigationBarAppearance alloc] init]);
+    UINavigationBarAppearance *appearance = [base copy];
+    appearance.titleTextAttributes      = attrs;
+    appearance.largeTitleTextAttributes = attrs;
+
+    vc.navigationItem.standardAppearance   = appearance;
+    vc.navigationItem.scrollEdgeAppearance = appearance;
+    vc.navigationItem.compactAppearance    = appearance;
 }
 
 %new
@@ -2936,8 +3640,13 @@ static NSInteger const kArrowOverlayTag = 99881;
     UIColor *titleColor = getTitleTextColor();
     if (!titleColor) return;
 
+    // iOS 16+ layout: the name label is nested inside UIStackViews.
+    // iOS 15 layout: the name label is a direct child of self.subviews.
+    // Cover both by recoloring direct UILabel children AND walking stack views.
     for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UIStackView class]]) {
+        if ([subview isKindOfClass:[UILabel class]]) {
+            ((UILabel *)subview).textColor = titleColor;
+        } else if ([subview isKindOfClass:[UIStackView class]]) {
             for (UIView *innerView in ((UIStackView *)subview).arrangedSubviews) {
                 if ([innerView isKindOfClass:[UIStackView class]]) {
                     for (UIView *stackItem in ((UIStackView *)innerView).arrangedSubviews) {
@@ -2964,6 +3673,21 @@ static NSInteger const kArrowOverlayTag = 99881;
     %orig;
     if (!isTweakEnabled()) return;
     self.backgroundColor = [UIColor clearColor];
+    // iOS 15: the cell's content view is painted black by the system and shows up
+    // as a backdrop behind the avatar/name/action buttons. Force it transparent.
+    UITableViewCell *cell = (UITableViewCell *)self;
+    if ([cell respondsToSelector:@selector(contentView)]) {
+        cell.contentView.backgroundColor = [UIColor clearColor];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    UITableViewCell *cell = (UITableViewCell *)self;
+    if ([cell respondsToSelector:@selector(contentView)]) {
+        cell.contentView.backgroundColor = [UIColor clearColor];
+    }
 }
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
@@ -3838,25 +4562,27 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getAdvancedReactionGlyphColor();
-    if (customTint) {
-        self.tintColor = customTint;
-        for (UIView *subview in self.subviews) {
-            if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
+    if (isCustomBubbleColorsEnabled()) {
+        UIColor *customTint = getAdvancedReactionGlyphColor();
+        if (customTint) {
+            self.tintColor = customTint;
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
+            }
         }
+        [self applyGlyphTintRecursively:self];
     }
-    if (isCustomBubbleColorsEnabled()) [self applyGlyphTintRecursively:self];
 }
 
 - (void)setTintColor:(UIColor *)color {
-    if (!isTweakEnabled()) { %orig; return; }
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) { %orig; return; }
     UIColor *customTint = getAdvancedReactionGlyphColor();
     if (customTint) {
         %orig(customTint);
         for (UIView *subview in self.subviews) {
             if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
         }
-        if (isCustomBubbleColorsEnabled()) [self applyGlyphTintRecursively:self];
+        [self applyGlyphTintRecursively:self];
         return;
     }
     %orig;
@@ -3865,36 +4591,21 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getAdvancedReactionGlyphColor();
-    if (customTint) {
-        self.tintColor = customTint;
-        for (UIView *subview in self.subviews) {
-            if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
+    if (isCustomBubbleColorsEnabled()) {
+        UIColor *customTint = getAdvancedReactionGlyphColor();
+        if (customTint) {
+            self.tintColor = customTint;
+            for (UIView *subview in self.subviews) {
+                if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
+            }
         }
+        [self applyGlyphTintRecursively:self];
     }
-    if (isCustomBubbleColorsEnabled()) [self applyGlyphTintRecursively:self];
 }
 
 %new
 - (void)applyGlyphTintRecursively:(UIView *)view {
-    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
-    if (customGlyphTint) {
-            NSDictionary *prefs = loadPrefs();
-        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
-        if (prefs[key]) {
-            // User explicitly set this color, use it directly
-            glyphTint = customGlyphTint;
-        } else {
-            // Falling back to system tint, apply derivation
-            CGFloat h, s, b, a;
-            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-                s *= 0.3;
-                b = MIN(1.0, b + 0.4);
-                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
-            }
-        }
-    }
+    UIColor *glyphTint = getGlyphTintColor();
 
     if ([view isKindOfClass:%c(CKAcknowledgmentGlyphImageView)]) {
         view.tintColor = glyphTint;
@@ -3984,6 +4695,136 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 %end
 
+%hook _UIPlatterShadowView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !self.window) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (!isTweakEnabled() || (!isChatColorBgEnabled() && !isChatImageBgEnabled())) {
+        %orig;
+        return;
+    }
+    %orig(YES);
+}
+
+%end
+
+%hook _UIPlatterSoftShadowView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !self.window) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (!isTweakEnabled() || (!isChatColorBgEnabled() && !isChatImageBgEnabled())) {
+        %orig;
+        return;
+    }
+    %orig(YES);
+}
+
+%end
+
+%hook _UICutoutShadowView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !self.window) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    self.hidden = YES;
+}
+
+- (void)setHidden:(BOOL)hidden {
+    if (!isTweakEnabled() || (!isChatColorBgEnabled() && !isChatImageBgEnabled())) {
+        %orig;
+        return;
+    }
+    %orig(YES);
+}
+
+%end
+
+%hook _UIPlatterTransformView
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    self.backgroundColor = [UIColor clearColor];
+}
+%end
+
+static BOOL isReplicantInsidePlatter(UIView *view) {
+    UIView *parent = view.superview;
+    int levels = 0;
+    while (parent && levels < 20) {
+        if ([parent isKindOfClass:%c(_UIPlatterClippingView)]) return YES;
+        parent = parent.superview;
+        levels++;
+    }
+    return NO;
+}
+
+%hook _UIReplicantView
+
+- (void)didMoveToSuperview {
+    %orig;
+    if (!isTweakEnabled() || !self.superview) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    if (!isReplicantInsidePlatter(self)) return;
+    if (self.bounds.size.height >= 200) self.alpha = 0;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
+    if (!isReplicantInsidePlatter(self)) return;
+    if (self.bounds.size.height >= 200) self.alpha = 0;
+}
+
+- (void)setAlpha:(CGFloat)alpha {
+    if (!isTweakEnabled() || (!isChatColorBgEnabled() && !isChatImageBgEnabled())) {
+        %orig;
+        return;
+    }
+    if (!isReplicantInsidePlatter(self)) { %orig; return; }
+    if (self.bounds.size.height >= 200) {
+        %orig(0);
+        return;
+    }
+    %orig;
+}
+
+%end
+
 %hook _UISystemBackgroundView
 
 - (void)setConfiguration:(id)configuration {
@@ -4033,24 +4874,7 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)setImage:(UIImage *)image {
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
 
-    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
-    if (customGlyphTint) {
-            NSDictionary *prefs = loadPrefs();
-        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
-        if (prefs[key]) {
-            // User explicitly set this color, use it directly
-            glyphTint = customGlyphTint;
-        } else {
-            // Falling back to system tint, apply derivation
-            CGFloat h, s, b, a;
-            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-                s *= 0.3;
-                b = MIN(1.0, b + 0.4);
-                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
-            }
-        }
-    }
+    UIColor *glyphTint = getGlyphTintColor();
 
     UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
     CGContextRef context = UIGraphicsGetCurrentContext();
@@ -4082,25 +4906,7 @@ static NSInteger const kArrowOverlayTag = 99881;
     %orig;
     if (!isTweakEnabled() || !self.window || !isCustomBubbleColorsEnabled()) return;
 
-    UIColor *glyphTint = [UIColor colorWithWhite:0.85 alpha:1.0];
-    UIColor *customGlyphTint = getAdvancedReactionGlyphColor();
-    if (customGlyphTint) {
-            NSDictionary *prefs = loadPrefs();
-        NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
-        if (prefs[key]) {
-            // User explicitly set this color, use it directly
-            glyphTint = customGlyphTint;
-        } else {
-            // Falling back to system tint, apply derivation
-            CGFloat h, s, b, a;
-            if ([customGlyphTint getHue:&h saturation:&s brightness:&b alpha:&a]) {
-                s *= 0.3;
-                b = MIN(1.0, b + 0.4);
-                glyphTint = [UIColor colorWithHue:h saturation:s brightness:b alpha:a];
-            }
-        }
-    }
-
+    UIColor *glyphTint = getGlyphTintColor();
     self.tintColor = glyphTint;
     for (UIView *subview in self.subviews) subview.tintColor = glyphTint;
 }
@@ -4252,9 +5058,10 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)didMoveToSuperview {
     %orig;
     if (!isTweakEnabled() || !self.superview) return;
+    __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self setNeedsLayout];
-        [self layoutIfNeeded];
+        [weakSelf setNeedsLayout];
+        [weakSelf layoutIfNeeded];
     });
 }
 
@@ -4518,22 +5325,61 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
+    if (isiOS15()) [self updateWAMPinnedColors];
     [self applyPinnedBubbleStyle];
 }
 
 - (void)didMoveToWindow {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) return;
+    if (isiOS15()) {
+        UIView *selfView = (UIView *)self;
+        if (selfView.window) {
+            [[NSNotificationCenter defaultCenter] removeObserver:(id)self name:kPrefsChangedNotification object:nil];
+            [[NSNotificationCenter defaultCenter] addObserver:(id)self
+                selector:@selector(handleWAMPinnedPrefsChanged)
+                name:kPrefsChangedNotification
+                object:nil];
+            [self updateWAMPinnedColors];
+        } else {
+            [[NSNotificationCenter defaultCenter] removeObserver:(id)self name:kPrefsChangedNotification object:nil];
+        }
+    }
+    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !((UIView *)self).window) return;
     [self applyPinnedBubbleStyle];
 }
 
 %new
+- (void)handleWAMPinnedPrefsChanged {
+    refreshPrefs();
+    [self updateWAMPinnedColors];
+    [self applyPinnedBubbleStyle];
+    [(UIView *)self setNeedsLayout];
+    [(UIView *)self layoutIfNeeded];
+}
+
+%new
+- (void)updateWAMPinnedColors {
+    NSDictionary *prefs = loadPrefs();
+    WAMPinnedBubbleLightColor = colorFromHex(prefs[@"pinnedBubbleColor"]) ?: getReceivedBubbleColor();
+    WAMPinnedBubbleDarkColor = colorFromHex(prefs[@"pinnedBubbleColorDark"]) ?: getReceivedBubbleColor();
+    WAMPinnedTextLightColor = colorFromHex(prefs[@"pinnedBubbleTextColor"]) ?: getReceivedTextColor();
+    WAMPinnedTextDarkColor = colorFromHex(prefs[@"pinnedBubbleTextColorDark"]) ?: getReceivedTextColor();
+
+    BOOL dark = NO;
+    if (@available(iOS 13.0, *)) {
+        dark = ((UIView *)self).traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    }
+    WAMPinnedBubbleCurrentColor = dark ? WAMPinnedBubbleDarkColor : WAMPinnedBubbleLightColor;
+    WAMPinnedTextCurrentColor = dark ? WAMPinnedTextDarkColor : WAMPinnedTextLightColor;
+}
+
+%new
 - (void)applyPinnedBubbleStyle {
-    UIColor *bubbleColor = getPinnedBubbleColor();
-    UIColor *textColor = getPinnedBubbleTextColor();
+    UIColor *bubbleColor = isiOS15() ? WAMPinnedBubbleCurrentColor : getPinnedBubbleColor();
+    UIColor *textColor = isiOS15() ? WAMPinnedTextCurrentColor : getPinnedBubbleTextColor();
     if (!bubbleColor && !textColor) return;
 
-    for (CALayer *sublayer in self.layer.sublayers) {
+    for (CALayer *sublayer in ((UIView *)self).layer.sublayers) {
         if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
             if (bubbleColor) sublayer.backgroundColor = bubbleColor.CGColor;
         } else if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewShadowLayer)]) {
@@ -4541,10 +5387,16 @@ static NSInteger const kArrowOverlayTag = 99881;
         }
     }
     if (textColor) {
-        for (UIView *subview in self.subviews) {
-            if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = textColor;
+        for (UIView *subview in ((UIView *)self).subviews) {
+            if ([subview isKindOfClass:[UILabel class]])
+                ((UILabel *)subview).textColor = textColor;
         }
     }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:(id)self];
+    %orig;
 }
 
 %end
@@ -4799,9 +5651,32 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 %hook UITableViewCell
 
+// iOS 15 only: CKDetails* table cells (Location, Map, SIM, SharedWithYou, etc.) are painted
+// with a dark fill at the cell level by the system grouped table style. Our blur sits on top
+// but doesn't fully hide it. Force the cell and its contentView transparent so whatever the
+// table backdrop is (chat bg or default) shows through.
+- (void)setBackgroundColor:(UIColor *)backgroundColor {
+    if (isTweakEnabled() && isiOS15()) {
+        NSString *cls = NSStringFromClass([self class]);
+        if ([cls hasPrefix:@"CKDetails"]) {
+            %orig([UIColor clearColor]);
+            return;
+        }
+    }
+    %orig;
+}
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
+
+    if (isiOS15()) {
+        NSString *cls = NSStringFromClass([self class]);
+        if ([cls hasPrefix:@"CKDetails"]) {
+            self.backgroundColor = [UIColor clearColor];
+            self.contentView.backgroundColor = [UIColor clearColor];
+        }
+    }
 
     UIView *parent = self.superview;
     BOOL isInContactView = NO;
@@ -4870,6 +5745,14 @@ static NSInteger const kArrowOverlayTag = 99881;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
+    if (isiOS15()) {
+        NSString *cls = NSStringFromClass([self class]);
+        if ([cls hasPrefix:@"CKDetails"]) {
+            self.backgroundColor = [UIColor clearColor];
+            self.contentView.backgroundColor = [UIColor clearColor];
+        }
+    }
 
     UIView *parent = self.superview;
     BOOL isInContactView = NO;
@@ -5023,7 +5906,6 @@ static NSInteger const kArrowOverlayTag = 99881;
 }
 
 %end
-
 
 %hook CKPinnedConversationTypingBubble
 
@@ -5209,6 +6091,7 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 %end
 
+
 /* iOS 17 Specific Hooks */
 
 #define kWrapperBackgroundImageTag 0x57414D54
@@ -5282,7 +6165,7 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isiOS17OrHigher()) return;
+    if (!isTweakEnabled()) return;
     [self applyLargeTitleStyle];
 }
 
@@ -5290,17 +6173,47 @@ static NSInteger const kArrowOverlayTag = 99881;
     %orig;
     if (!isTweakEnabled() || !isiOS17OrHigher()) return;
     [self applyLargeTitleStyle];
+
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+            selector:@selector(handleLargeTitlePrefsChanged)
+            name:kPrefsChangedNotification
+            object:nil];
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    }
+}
+
+%new
+- (void)handleLargeTitlePrefsChanged {
+    refreshPrefs();
+    [self applyLargeTitleStyle];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
 }
 
 %new
 - (void)applyLargeTitleStyle {
+    NSString *conversationListTitle = getConversationListTitle();
+    UIColor *titleColor = getConversationListTitleColor();
+
     for (UIView *subview in self.subviews) {
-        if ([subview isKindOfClass:[UILabel class]]) {
-            UILabel *label = (UILabel *)subview;
-            if ([label.text isEqualToString:@"Messages"] || [label.text isEqualToString:getConversationListTitle()]) {
-                label.text = getConversationListTitle();
-                label.textColor = getConversationListTitleColor();
+        if (![subview isKindOfClass:[UILabel class]]) continue;
+        UILabel *label = (UILabel *)subview;
+        if (![label.text isEqualToString:@"Messages"] && ![label.text isEqualToString:conversationListTitle]) continue;
+        label.text = conversationListTitle;
+        if (titleColor) {
+            if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
+            label.textColor = titleColor;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+            if (orig && orig != [NSNull null]) label.textColor = orig;
         }
     }
 }
@@ -5694,6 +6607,217 @@ static NSInteger const kArrowOverlayTag = 99881;
 
 %end
 
+
+/* iOS 15 specific, mostly compatibility hooks */
+
+%hook CKMessageEntryWaveformView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15() || !self.window) return;
+    [self applyWAMAudioStyling];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15()) return;
+    [self applyWAMAudioStyling];
+}
+
+%new
+- (void)applyWAMAudioStyling {
+    UIColor *tintColor = getSystemTintColor();
+    UIColor *bgColor = isInputFieldCustomizationEnabled() ? getInputFieldBackgroundColor() : nil;
+
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *ev = (UIVisualEffectView *)sub;
+            if (bgColor && ev.frame.size.width > 0) {
+                ev.hidden = YES;
+
+                for (UIView *existing in [self.subviews copy]) {
+                    if (existing.tag == 99873) [existing removeFromSuperview];
+                }
+
+                UIView *pill = [[UIView alloc] initWithFrame:ev.frame];
+                pill.tag = 99873;
+                pill.backgroundColor = bgColor;
+                pill.layer.cornerRadius = ev.layer.cornerRadius;
+                pill.clipsToBounds = YES;
+                pill.userInteractionEnabled = NO;
+                [self insertSubview:pill atIndex:0];
+            }
+        }
+        if ([sub isKindOfClass:[UIImageView class]] && tintColor) {
+            UIImageView *iv = (UIImageView *)sub;
+            if (iv.image && iv.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                iv.image = [iv.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            }
+            iv.tintColor = tintColor;
+        }
+        if ([sub isKindOfClass:[UILabel class]] && tintColor) {
+            ((UILabel *)sub).textColor = tintColor;
+        }
+    }
+}
+
+%end
+
+%hook CKMessageEntryRecordedAudioView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15() || !self.window) return;
+    [self applyWAMAudioStyling];
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15()) return;
+    [self applyWAMAudioStyling];
+}
+
+%new
+- (void)applyWAMAudioStyling {
+    UIColor *tintColor = getSystemTintColor();
+    UIColor *bgColor = isInputFieldCustomizationEnabled() ? getInputFieldBackgroundColor() : nil;
+
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UIVisualEffectView class]]) {
+            UIVisualEffectView *ev = (UIVisualEffectView *)sub;
+            if (bgColor && ev.frame.size.width > 0) {
+                ev.hidden = YES;
+
+                for (UIView *existing in [self.subviews copy]) {
+                    if (existing.tag == 99873) [existing removeFromSuperview];
+                }
+
+                UIView *pill = [[UIView alloc] initWithFrame:ev.frame];
+                pill.tag = 99873;
+                pill.backgroundColor = bgColor;
+                pill.layer.cornerRadius = ev.layer.cornerRadius;
+                pill.clipsToBounds = YES;
+                pill.userInteractionEnabled = NO;
+                [self insertSubview:pill atIndex:0];
+            }
+        }
+        if ([sub isKindOfClass:[UIImageView class]] && tintColor) {
+            UIImageView *iv = (UIImageView *)sub;
+            if (iv.image && iv.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                iv.image = [iv.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            }
+            iv.tintColor = tintColor;
+        }
+        if ([sub isKindOfClass:[UILabel class]] && tintColor) {
+            ((UILabel *)sub).textColor = tintColor;
+        }
+        if ([sub isKindOfClass:[UIButton class]] && tintColor) {
+            ((UIButton *)sub).tintColor = tintColor;
+        }
+    }
+}
+
+%end
+
+%hook CKAvatarNavigationBar
+
+- (void)layoutSubviews {
+    %orig;
+    [self applyWAMTitleStyling];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    UIView *selfView = (UIView *)self;
+    if (selfView.window) {
+        [[NSNotificationCenter defaultCenter] removeObserver:(id)self name:kPrefsChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:(id)self
+            selector:@selector(handleWAMTitlePrefsChanged)
+            name:kPrefsChangedNotification
+            object:nil];
+        [selfView setNeedsLayout];
+        [selfView layoutIfNeeded];
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:(id)self name:kPrefsChangedNotification object:nil];
+    }
+}
+
+%new
+- (void)handleWAMTitlePrefsChanged {
+    refreshPrefs();
+    [(UIView *)self setNeedsLayout];
+    [(UIView *)self layoutIfNeeded];
+}
+
+%new
+- (void)applyWAMTitleStyling {
+    if (!isTweakEnabled() || !isiOS15()) return;
+
+    NSString *conversationListTitle = getConversationListTitle();
+    UIColor *titleColor = getConversationListTitleColor();
+
+    NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
+    while (queue.count > 0) {
+        UIView *view = queue[0];
+        [queue removeObjectAtIndex:0];
+        if ([view isKindOfClass:[UILabel class]]) {
+            UILabel *label = (UILabel *)view;
+            if ([label.text isEqualToString:@"Messages"] ||
+                [label.text isEqualToString:conversationListTitle] ||
+                (WAMLastKnownTitle && [label.text isEqualToString:WAMLastKnownTitle])) {
+                label.text = conversationListTitle;
+                if (titleColor) {
+                    if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                        objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    }
+                    label.textColor = titleColor;
+                } else {
+                    id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+                    if (orig && orig != [NSNull null]) label.textColor = orig;
+                }
+                WAMLastKnownTitle = conversationListTitle;
+            }
+        }
+        for (UIView *sub in view.subviews) {
+            [queue addObject:sub];
+        }
+    }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:(id)self];
+    %orig;
+}
+
+%end
+
+%hook CKConversationListEmbeddedStandardTableViewCell
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled() || !isiOS15()) return;
+    applyCustomTextColors((UIView *)self);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    UIView *selfView = (UIView *)self;
+    if (!isTweakEnabled() || !isiOS15() || !selfView.window) return;
+    applyCustomTextColors(selfView);
+}
+
+%end
+
+%hook CKPinnedConversationActivityItemViewBackdropLayer
+
+- (void)setBackgroundColor:(CGColorRef)backgroundColor {
+    if (!isiOS15() || !WAMPinnedBubbleCurrentColor) { %orig; return; }
+    %orig(WAMPinnedBubbleCurrentColor.CGColor);
+}
+
+%end
+
+
 /*============
     %ctor
 ============*/
@@ -5709,3 +6833,5 @@ static NSInteger const kArrowOverlayTag = 99881;
         CFNotificationSuspensionBehaviorCoalesce
     );
 }
+
+/* Made with love from the Show Me State. Support small content creators and local farmers! */

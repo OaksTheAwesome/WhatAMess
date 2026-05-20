@@ -54,8 +54,8 @@
 
 - (void)pickConvListBgImage {
     NSString *path = [self isEditingDarkMode]
-        ? @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"
-        : @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg";
+        ? WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg")
+        : WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg");
     [self showImagePickerForDestinationPath:path];
 }
 

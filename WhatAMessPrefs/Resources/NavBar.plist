@@ -54,9 +54,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>Stock NavBar Settings</string>
+			<string>NavBar Customization</string>
 			<key>footerText</key>
-			<string>Colorizes the stock navigation bar. Only works if Modern NavBar is disabled.</string>
+			<string>Colorizes the navigation bar. Works with both stock and modern NavBar.</string>
 		</dict>
 		<dict>
 			<key>cell</key>

@@ -34,21 +34,21 @@
 
 #pragma mark - Actions
 
-- (void)respring {
+- (void)killApp {
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Respring"
-        message:@"Are you sure you want to respring?"
+        alertControllerWithTitle:@"Kill Messages"
+        message:@"Are you sure you want to restart Messages? This will forcibly close the app!"
         preferredStyle:UIAlertControllerStyleAlert];
 
     [alert addAction:[UIAlertAction actionWithTitle:@"Not Yet"
         style:UIAlertActionStyleCancel handler:nil]];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"Respring"
+    [alert addAction:[UIAlertAction actionWithTitle:@"Restart"
         style:UIAlertActionStyleDestructive
         handler:^(UIAlertAction *action) {
             pid_t pid;
-            const char *args[] = {"sbreload", NULL};
-            posix_spawn(&pid, "/var/jb/usr/bin/sbreload", NULL, NULL, (char *const *)args, NULL);
+            const char *args[] = {"killall", "MobileSMS", NULL};
+            posix_spawn(&pid, [WAMJBPath(@"/usr/bin/killall") UTF8String], NULL, NULL, (char *const *)args, NULL);
         }]];
 
     [self presentViewController:alert animated:YES completion:nil];
@@ -80,7 +80,7 @@
         [dirPath UTF8String],
         NULL
     };
-    int result = posix_spawn(&pid, "/var/jb/usr/bin/zip", NULL, NULL, (char *const *)args, NULL);
+    int result = posix_spawn(&pid, [WAMJBPath(@"/usr/bin/zip") UTF8String], NULL, NULL, (char *const *)args, NULL);
     if (result != 0) return NO;
     int status;
     waitpid(pid, &status, 0);
@@ -115,10 +115,10 @@
 
     // Copy background images if they exist
     NSDictionary *images = @{
-        @"background.jpg":           @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg",
-        @"background_dark.jpg":      @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg",
-        @"chat_background.jpg":      @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg",
-        @"chat_background_dark.jpg": @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
+        @"background.jpg":           WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"),
+        @"background_dark.jpg":      WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"),
+        @"chat_background.jpg":      WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"),
+        @"chat_background_dark.jpg": WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg")
     };
 
     for (NSString *destName in images) {
@@ -203,7 +203,7 @@
         "-d", [tempDir UTF8String],
         NULL
     };
-    int spawnResult = posix_spawn(&pid, "/var/jb/usr/bin/unzip", NULL, NULL, (char *const *)args, NULL);
+    int spawnResult = posix_spawn(&pid, [WAMJBPath(@"/usr/bin/unzip") UTF8String], NULL, NULL, (char *const *)args, NULL);
     if (spawnResult != 0) {
         [self showImportError:@"Could not launch unzip utility."];
         return;
@@ -245,10 +245,10 @@
 
     // Copy background images if present
     NSDictionary *images = @{
-        @"background.jpg":           @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg",
-        @"background_dark.jpg":      @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg",
-        @"chat_background.jpg":      @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg",
-        @"chat_background_dark.jpg": @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
+        @"background.jpg":           WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"),
+        @"background_dark.jpg":      WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"),
+        @"chat_background.jpg":      WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"),
+        @"chat_background_dark.jpg": WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg")
     };
 
     for (NSString *fileName in images) {
@@ -269,17 +269,17 @@
 
     UIAlertController *alert = [UIAlertController
         alertControllerWithTitle:@"Preset Imported Sucessfully"
-        message:@"Preset applied! Changes may not display correctly until you respring. Would you like to respring now?"
+        message:@"Preset applied! Changes may not display correctly until you restart the app. Would you like to restart now?"
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Not Yet"
         style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Respring"
+    [alert addAction:[UIAlertAction actionWithTitle:@"Restart"
         style:UIAlertActionStyleDestructive
         handler:^(UIAlertAction *action) {
             pid_t pid;
-            const char *args[] = {"sbreload", NULL};
-            posix_spawn(&pid, "/var/jb/usr/bin/sbreload", NULL, NULL, (char *const *)args, NULL);
-        }]];
+            const char *args[] = {"killall", "MobileSMS", NULL};
+            posix_spawn(&pid, [WAMJBPath(@"/usr/bin/killall") UTF8String], NULL, NULL, (char *const *)args, NULL);
+            }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
@@ -316,15 +316,17 @@
         handler:^(UIAlertAction *action) {
             NSFileManager *fm = [NSFileManager defaultManager];
 
-            // Delete prefs plist
+            // Delete prefs plist (this is the sole source of truth on the tweak side now;
+            // wamMarkChangelogSeen also writes directly to this file, so its deletion is
+            // sufficient to retrigger the splash on next launch).
             [fm removeItemAtPath:kWAMPrefsPlistPath error:nil];
 
             // Delete background images
             NSArray *imagePaths = @[
-                @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg",
-                @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg",
-                @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg",
-                @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg"
+                WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"),
+                WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"),
+                WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background.jpg"),
+                WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/chat_background_dark.jpg")
             ];
             for (NSString *path in imagePaths) {
                 [fm removeItemAtPath:path error:nil];
@@ -336,16 +338,16 @@
 
             UIAlertController *done = [UIAlertController
                 alertControllerWithTitle:@"Preferences Reset"
-                message:@"All settings have been cleared. Respring to apply."
+                message:@"All settings have been cleared. Restart app to apply."
                 preferredStyle:UIAlertControllerStyleAlert];
             [done addAction:[UIAlertAction actionWithTitle:@"Not Yet"
                 style:UIAlertActionStyleCancel handler:nil]];
-            [done addAction:[UIAlertAction actionWithTitle:@"Respring"
+            [done addAction:[UIAlertAction actionWithTitle:@"Restart"
                 style:UIAlertActionStyleDestructive
                 handler:^(UIAlertAction *action) {
-                    pid_t pid;
-                    const char *args[] = {"sbreload", NULL};
-                    posix_spawn(&pid, "/var/jb/usr/bin/sbreload", NULL, NULL, (char *const *)args, NULL);
+                pid_t pid;
+                const char *args[] = {"killall", "MobileSMS", NULL};
+                posix_spawn(&pid, [WAMJBPath(@"/usr/bin/killall") UTF8String], NULL, NULL, (char *const *)args, NULL);
                 }]];
             [self presentViewController:done animated:YES completion:nil];
         }]];

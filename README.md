@@ -3,7 +3,7 @@
 # WhatAMess
 **A simple Messages customization tweak for today's jailbreaks.**
 
-_Designed with iOS 16 in mind, tested on NathanLR on iOS 17._
+_Designed with iOS 16 in mind, supported on iOS 15 and tested on NathanLR on iOS 17._
 
 ## Description
 
@@ -14,7 +14,7 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 ### General/App-Wide
 - Change App-Wide Tint Color
 - Modern NavBar: A navigation bar that blurs content closer to the top of the screen. (Inspired by Messages on iOS 26. Togglable)
-- Stock NavBar Tinting
+- NavBar Tinting
 - Cell Tinting (with optional overrides)
 - Dark/Light Mode Customization
 - Preset Importing/Exporting
@@ -38,7 +38,7 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 - Custom SMS, iMessage, and Recieved Bubble Text Colors
 - Custom Timestamp Colors
 - Modern Message Bar: A similar principle to Modern NavBar. Creates a blur behind the message bar that blurs content closer to the bottom of the screen.
-- Stock Message Bar Tint Color
+- Message Bar Tint Color
 - Message Input Field Background Color
 - Message Input Field Background Blur
 - Message Input Field Placeholder Text + Text Color
@@ -47,14 +47,14 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 - Link Bubble Background + Text Color
 
 ## Compatability
-WhatAMess is compatible with devices running a _rootless_ jailbreak on iOS 16. ***Rootful support coming soon!***
+WhatAMess is compatible with devices running a _rootless_ jailbreak on iOS 16 and 15. ***Rootful support (maybe) coming soon!***
 The tweak was also tested on (and has a few specific hooks for) iOS 17, NathanLR 2.0, on a 2018 11" iPad Pro. That was the only other "jailbroken" device I had for testing. Technically speaking it should be mostly fine on iOS 17/NathanLR 2.0.
 
 NathanLR 1.0 (non-iOS 17 version) is very questionable. Other semi-jailbreaks and injection methods like Serotonin likely don't work (see below).
 
 Compatability with the following is unknown/uncertain as I don't have the devices to test it but, considering the tweak injects into Messages only, it may be fine. If the tweak works, confirmed, on any of these, _please let me know_:
 - Seratonin (According to u/digitalganster, likely doesn't work currently)
-- Roothide / Bootstrap (Have suspicions it likely works, but unconfirmed)
+- Roothide / Bootstrap (Confirmed working by "Gushi", iOS 16.1)
 - Palera1n (Confirmed working by "galaxy note 7", iPhone X iOS 16.7.7)
 - Palehide (Confirmed working by "galaxy note 7", iPhone 8+ iOS 16.7.12)
 
@@ -68,7 +68,6 @@ Please keep in mind this is my _first tweak_ and I'm still getting familiar with
 - Contact "Info" view on iOS 17 is slightly broken.
 
 ## Features I'd Like to Add
-- Preset Sharing
 - Custom Large Title
 - Redesigned Conversation Cells
 - Better User Images + Name at Top of Chat View

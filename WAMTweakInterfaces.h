@@ -18,12 +18,15 @@
 -(void)handlePrefsChanged;
 - (NSArray *)getAllSubviews:(UIView *)view;
 -(void)forceRedrawCell:(UIView *)view;
+-(void)wamHandleConversationChanged:(id)conversation;
+-(void)wamRetryBgRefresh:(int)attempt;
 @end
 
 @interface _UIBarBackground : UIView
 -(void)createOurBlur;
 -(void)removeSystemViews;
 -(void)ensureBlurExists;
+-(void)removeOurModernBlur;
 -(void)applyModernTintOverlay:(UIVisualEffectView *)blurView;
 -(BOOL)findContactViewInWindow:(UIView *)view;
 - (BOOL)isBottomBar;
@@ -122,6 +125,9 @@
 @interface CKDetailsTableView : UITableView
 -(void)updateDetailsBackground;
 -(void)applyDetailsNavTitleColor;
+-(void)wamSwizzleHeightDelegate:(id)delegate;
+-(void)wamInstallCustomizeHeader;
+-(void)wamHeaderCustomizeTapped;
 @end
 
 @interface _UITableViewHeaderFooterContentView : UIView
@@ -129,9 +135,13 @@
 
 @interface CNGroupIdentityHeaderContainerView : UIView
 -(void)applyContactNameColor;
+-(void)wamCacheNameAndRefreshChatBg;
+-(NSString *)displayedContactName;
 @end
 
 @interface CKGroupPhotoCell : UIView
+-(void)ensurePerContactBgButton;
+-(void)perContactBgCellTapped;
 @end
 
 @interface CNActionView : UIView
@@ -336,6 +346,7 @@
 @interface CKAvatarNavigationBar
 - (void)handleWAMTitlePrefsChanged;
 - (void)applyWAMTitleStyling;
+- (void)wamApplyChatBgForVisibleTitle;
 @end
 
 @interface CKConversationListEmbeddedStandardTableViewCell

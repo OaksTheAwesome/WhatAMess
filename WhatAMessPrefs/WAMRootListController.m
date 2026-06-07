@@ -113,7 +113,9 @@
     NSString *plistPath = [tempDir stringByAppendingPathComponent:@"preset.plist"];
     [presetPrefs writeToFile:plistPath atomically:YES];
 
-    // Copy background images if they exist
+    // Copy background images if they exist. Allowlisted on purpose — the per_contact/
+    // subdirectory (per-chat background images keyed by contact name) is deliberately
+    // NOT exported: it's both private data and only meaningful on the user's own device.
     NSDictionary *images = @{
         @"background.jpg":           WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background.jpg"),
         @"background_dark.jpg":      WAMJBPath(@"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/background_dark.jpg"),

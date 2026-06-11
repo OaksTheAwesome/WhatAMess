@@ -20,6 +20,7 @@
 -(void)forceRedrawCell:(UIView *)view;
 -(void)wamHandleConversationChanged:(id)conversation;
 -(void)wamRetryBgRefresh:(int)attempt;
+-(void)wamClearChatAndForceRefresh;
 @end
 
 @interface _UIBarBackground : UIView

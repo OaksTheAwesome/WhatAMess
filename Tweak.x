@@ -66,14 +66,287 @@ static NSString *gWAMCurrentContactDisplayName = nil;
 // cleared right after. Lets the trigger hook's freshly-captured name win over
 // the _currentConversation ivar walk, which lags during chat switch.
 static NSString *gWAMTriggerNameOverride = nil;
+// Legacy flag, kept around because several lifecycle hooks still set it. The
+// walker no longer consults it — see comments in getCurrentContactName for
+// the actual ground-truth signal (CKMessagesController._currentConversation).
+static BOOL gWAMChatIsActiveSurface = NO;
+// Wall-clock time when gWAMCurrentContactName was last set by a tap-driven
+// pre-apply (cell setHighlighted: / pinned touchesBegan:). Used by the walker
+// to bridge the brief gap between the tap and iOS Messages populating
+// _currentConversation on the chat controller (~1 second on this iOS build).
+// Outside that window, _currentConversation is the sole truth.
+static NSTimeInterval gWAMCacheSetAt = 0;
+// Set by the heartbeat to true whenever a CKConversationListCollectionViewController
+// instance has its view in a window. This is the synchronous signal the
+// tintColor hook uses to decide whether navbar elements should bypass the
+// per-contact tint and use the global value instead — without it the navbar
+// flashes per-contact colors during the chat→list transition before
+// _currentConversation gets cleared.
+static BOOL gWAMConvListViewVisible = NO;
 // Authoritative "are we actively rendering inside a chat right now?" flag.
 static NSString *getActiveContactNameForBg(void);
+// Forward decls for the chatIdentifier alias system — defined further down
+// next to the per-contact storage helpers. The walker calls into them
+// whenever it reads both displayName and chatIdentifier off a CKConversation.
+static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *displayName);
+// Forward decls for the heartbeat — these live in the color helpers section
+// further down, but the heartbeat's tick uses them.
+BOOL isCustomTextColorsEnabled(void);
+BOOL isTweakEnabled(void);
+UIColor *getTitleTextColorConvList(void);
+static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class targetClass);
 
 // Recursively look through children + presented for a VC of `targetClass`.
 // The previous walker only followed `presentedViewController`, which on
 // iPhone push-nav never crosses the UINavigationController barrier — meaning
 // CKMessagesController was never actually found and we always fell back to a
 // cached name. This version finds it in any nav stack, split view, or tab.
+// Walk UP from a touched view (cell content, pinned bubble, etc.) to find the
+// containing collection view, get this cell's indexPath, look up the list
+// controller via the responder chain, and ask it for the conversation at that
+// indexPath. Used by the rename-alias path to extract chatIdentifier without
+// waiting for CKMessagesController._currentConversation to catch up (which on
+// iPad split-view can lag the user's visible chat by many seconds).
+//
+// MUST be called asynchronously off the tap path — calling conversationAtIndexPath:
+// synchronously during selection blocks iOS's tap handling.
+static id wamConversationFromTappedView(UIView *view) {
+    if (!view) return nil;
+    UIView *cell = view;
+    while (cell && ![cell isKindOfClass:[UICollectionViewCell class]]) {
+        cell = cell.superview;
+    }
+    if (!cell) return nil;
+    UIView *p = cell.superview;
+    UICollectionView *cv = nil;
+    while (p) {
+        if ([p isKindOfClass:[UICollectionView class]]) { cv = (UICollectionView *)p; break; }
+        p = p.superview;
+    }
+    if (!cv) return nil;
+    NSIndexPath *ip = [cv indexPathForCell:(UICollectionViewCell *)cell];
+    if (!ip) return nil;
+    UIResponder *r = cv.nextResponder;
+    UIViewController *listVC = nil;
+    while (r) {
+        if ([r isKindOfClass:[UIViewController class]]) { listVC = (UIViewController *)r; break; }
+        r = r.nextResponder;
+    }
+    if (!listVC || ![listVC respondsToSelector:@selector(conversationAtIndexPath:)]) return nil;
+    IMP imp = [listVC methodForSelector:@selector(conversationAtIndexPath:)];
+    id (*fn)(id, SEL, NSIndexPath *) = (void *)imp;
+    return fn(listVC, @selector(conversationAtIndexPath:), ip);
+}
+
+// Reconcile the alias for a freshly-tapped cell. Pulls displayName + chatIdentifier
+// off the conversation found via wamConversationFromTappedView, then routes
+// through wamReconcileAliasForChat for migration. Cheap on the no-rename path.
+static void wamReconcileAliasFromTappedView(UIView *view) {
+    id conv = wamConversationFromTappedView(view);
+    if (!conv) return;
+    NSString *displayName = nil;
+    NSString *cid = nil;
+    Ivar ch = class_getInstanceVariable([conv class], "_chat");
+    id chat = ch ? object_getIvar(conv, ch) : nil;
+    if ([chat respondsToSelector:@selector(displayName)]) {
+        NSString *dn = [chat performSelector:@selector(displayName)];
+        if ([dn isKindOfClass:[NSString class]] && dn.length) displayName = dn;
+    }
+    if ([chat respondsToSelector:@selector(chatIdentifier)]) {
+        NSString *c = [chat performSelector:@selector(chatIdentifier)];
+        if ([c isKindOfClass:[NSString class]] && c.length) cid = c;
+    }
+    if (cid.length && displayName.length) {
+        wamReconcileAliasForChat(cid, displayName);
+    }
+}
+
+// Force every view in a hierarchy to invalidate tint + layout + display. Used
+// when leaving a chat — UIKit caches tintColor effects and doesn't always
+// re-query our overridden getter unless something fires tintColorDidChange.
+// Combined with setNeedsLayout + setNeedsDisplay, this guarantees a full
+// visual refresh on the next frame.
+static void wamForceVisualRefresh(UIView *view) {
+    if (!view) return;
+    [view tintColorDidChange];
+    [view setNeedsLayout];
+    [view setNeedsDisplay];
+    for (UIView *sub in view.subviews) {
+        wamForceVisualRefresh(sub);
+    }
+}
+
+// EXTREME force-apply: walk every subview, find every CKLabel that lives
+// inside a conv list cell, and DIRECTLY force-set its textColor to the
+// current global value. Bypasses lifecycle, layout, and reloadData entirely.
+// Run on a CADisplayLink so it executes every frame whenever no chat is the
+// active surface — guarantees the conv list snaps to globals the instant
+// the chat is gone, regardless of which lifecycle path led there.
+static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
+    if (!view) return;
+    Class cellCls = %c(CKConversationListCollectionViewConversationCell);
+    Class pinnedBubbleCls = %c(CKPinnedConversationSummaryBubble);
+    if ([view isKindOfClass:%c(CKLabel)]) {
+        // Confirm this label is inside a conv list cell.
+        UIView *p = view.superview;
+        BOOL inCell = NO;
+        while (p) {
+            if (cellCls && [p isKindOfClass:cellCls]) { inCell = YES; break; }
+            p = p.superview;
+        }
+        if (inCell && isCustomTextColorsEnabled()) {
+            UILabel *label = (UILabel *)view;
+            UIColor *target = getTitleTextColorConvList();
+            if (target && ![label.textColor isEqual:target]) {
+                label.textColor = target;
+            }
+        }
+    }
+    // Pinned conversation bubbles cache their bubble color in static globals
+    // (WAMPinnedBubbleCurrentColor etc.) — that cache gets baked when the
+    // bubble first lays out while a chat is active, and inherits that chat's
+    // per-contact color via getReceivedBubbleColor's fallback. Force a fresh
+    // updateWAMPinnedColors+applyPinnedBubbleStyle here so the cache is
+    // rebuilt against the CURRENT (global) state every frame the chat isn't
+    // active. updateWAMPinnedColors is cheap; applyPinnedBubbleStyle does a
+    // dedupe-equivalent check internally.
+    if (pinnedBubbleCls && [view isKindOfClass:pinnedBubbleCls]) {
+        if ([view respondsToSelector:@selector(updateWAMPinnedColors)]) {
+            [view performSelector:@selector(updateWAMPinnedColors)];
+        }
+        if ([view respondsToSelector:@selector(applyPinnedBubbleStyle)]) {
+            [view performSelector:@selector(applyPinnedBubbleStyle)];
+        }
+    }
+    for (UIView *sub in view.subviews) {
+        wamForceGlobalColorsOnConvListLabels(sub);
+    }
+}
+
+// Heartbeat tick — fires every frame via CADisplayLink. Cheap on the no-
+// change path (one window walk, one ivar read per view). When the chat is
+// not the active surface, force the conv list to globals.
+@interface WAMHeartbeatTarget : NSObject
++ (instancetype)shared;
+- (void)tick;
+@end
+@implementation WAMHeartbeatTarget {
+    CADisplayLink *_link;
+}
++ (instancetype)shared {
+    static WAMHeartbeatTarget *s = nil;
+    static dispatch_once_t o;
+    dispatch_once(&o, ^{
+        s = [WAMHeartbeatTarget new];
+        s->_link = [CADisplayLink displayLinkWithTarget:s selector:@selector(tick)];
+        s->_link.preferredFramesPerSecond = 60;  // 16ms cadence — halves the worst-case transition latency
+        [s->_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    });
+    return s;
+}
+- (void)tick {
+    if (!isTweakEnabled()) return;
+    NSMutableArray *winList = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                [winList addObjectsFromArray:((UIWindowScene *)scene).windows];
+            }
+        }
+    }
+    // INDEPENDENT detection — don't trust the flag. Walk windows ourselves
+    // and decide if any chat is visibly active. A chat is "active" iff a
+    // CKMessagesController exists with its view loaded AND in a window.
+    Class messagesCls = %c(CKMessagesController);
+    BOOL chatIsVisible = NO;
+    UIViewController *foundCtrl = nil;
+    if (messagesCls) {
+        for (UIWindow *w in winList) {
+            UIViewController *vc = wamFindVCInHierarchy(w.rootViewController, messagesCls);
+            if (vc && [vc isViewLoaded] && vc.view.window) {
+                chatIsVisible = YES;
+                foundCtrl = vc;
+                break;
+            }
+        }
+    }
+    // Detect chat-vs-conv-list by reading _currentConversation on the found
+    // chat controller — that's the ground truth on iOS 26 (CKMessagesController
+    // is the app's root VC and stays mounted; only the ivar flips).
+    id conv = nil;
+    if (foundCtrl) {
+        Ivar cv = class_getInstanceVariable([foundCtrl class], "_currentConversation");
+        conv = cv ? object_getIvar(foundCtrl, cv) : nil;
+    }
+    chatIsVisible = (conv != nil);
+    // Track conv list view visibility — used by the UIView.tintColor hook to
+    // structurally force globals on navbar elements when the conv list is
+    // showing (no walker timing dependency).
+    Class listCls = %c(CKConversationListCollectionViewController);
+    BOOL listInWindow = NO;
+    if (listCls) {
+        for (UIWindow *w in winList) {
+            UIViewController *listVC = wamFindVCInHierarchy(w.rootViewController, listCls);
+            if (listVC && [listVC isViewLoaded] && listVC.view.window) {
+                listInWindow = YES;
+                break;
+            }
+        }
+    }
+    static BOOL prevListVisible = NO;
+    static NSString *prevTopVCClass = nil;
+    // Also locate the nav controller and read its topViewController class —
+    // we want to verify this is a sharper signal than view.window for the
+    // chat↔list transition.
+    Class navCls = %c(CKNavigationController);
+    NSString *topVCClass = @"(none)";
+    if (navCls && foundCtrl) {
+        for (UIViewController *child in foundCtrl.childViewControllers) {
+            if ([child isKindOfClass:navCls]) {
+                UINavigationController *nav = (UINavigationController *)child;
+                topVCClass = NSStringFromClass([nav.topViewController class]) ?: @"(nil)";
+                break;
+            }
+        }
+    }
+    BOOL topVCChanged = ![topVCClass isEqualToString:prevTopVCClass];
+    if (listInWindow != prevListVisible || topVCChanged) {
+        WAMLOG(@"[heartbeat] listVis %d→%d topVC '%@'→'%@' (chatVisible=%d conv=%p)",
+               prevListVisible, listInWindow, prevTopVCClass ?: @"(init)", topVCClass, chatIsVisible, conv);
+        prevListVisible = listInWindow;
+        prevTopVCClass = [topVCClass copy];
+    }
+    gWAMConvListViewVisible = listInWindow;
+    // SYNC the flag with reality. If lifecycle hooks didn't fire for whatever
+    // reason (iPad split-view, custom transitions, etc.), this brings the
+    // state back to truth.
+    static BOOL prevChatVisible = NO;
+    BOOL stateChanged = (chatIsVisible != prevChatVisible);
+    prevChatVisible = chatIsVisible;
+    if (chatIsVisible) {
+        gWAMChatIsActiveSurface = YES;
+        return;  // chat is the surface; let per-contact paint
+    }
+    // No chat visible — ensure flag is off and any stale cache is cleared.
+    if (gWAMChatIsActiveSurface) {
+        gWAMChatIsActiveSurface = NO;
+        gWAMCurrentContactName = nil;
+        gWAMCurrentContactDisplayName = nil;
+        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    }
+    // On the transition frame (chat just disappeared), do the expensive full-
+    // hierarchy tint/layout/display invalidation so UIKit re-queries our
+    // tintColor getter for every view. On steady-state frames, only do the
+    // cheap CKLabel force-set.
+    for (UIWindow *w in winList) {
+        wamForceGlobalColorsOnConvListLabels(w);
+        if (stateChanged) {
+            wamForceVisualRefresh(w);
+        }
+    }
+}
+@end
+
 static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class targetClass) {
     if (!vc) return nil;
     if ([vc isKindOfClass:targetClass]) return vc;
@@ -95,6 +368,20 @@ static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class target
 // directly from the live controller every time — no cache fallback that
 // could pollute the conv list with the last-seen chat's name.
 static NSString *getCurrentContactName(void) {
+    // GROUND TRUTH on iOS 26 Messages: CKMessagesController is the app's root
+    // VC and is ALWAYS mounted full-screen. Lifecycle hooks (viewWillAppear/
+    // Disappear, didMoveToParent) never fire when the user "leaves" a chat —
+    // they just see the conv list view, which is embedded inside the chat
+    // controller's own VC tree. The only reliable signal for "no chat is
+    // active right now" is CKMessagesController._currentConversation == nil.
+    //
+    // Logged behavior in production:
+    //   conv list visible → _currentConversation = nil
+    //   chat selected    → _currentConversation = <non-nil CKConversation>
+    //
+    // We honor a brief cache window so cell-tap pre-apply (which sets the
+    // cache then immediately calls updateChatBackground) still works during
+    // the ~1 second before iOS Messages populates _currentConversation.
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return nil;
 
@@ -118,38 +405,62 @@ static NSString *getCurrentContactName(void) {
         messagesCtrl = wamFindVCInHierarchy(w.rootViewController, messagesCtrlClass);
         if (messagesCtrl) break;
     }
-    if (!messagesCtrl) return gWAMCurrentContactName;
-
-    // Nav-stack containment is the "still the active chat" check.
-    UINavigationController *nav = messagesCtrl.navigationController;
-    if (nav && ![nav.viewControllers containsObject:messagesCtrl]) return nil;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    BOOL cacheFresh = gWAMCurrentContactName.length && (now - gWAMCacheSetAt) < 2.0;
+    if (!messagesCtrl) {
+        // No chat controller at all → fall back to fresh cache (tap pre-apply
+        // race) or nil.
+        return cacheFresh ? gWAMCurrentContactName : nil;
+    }
 
     Ivar cv = class_getInstanceVariable([messagesCtrl class], "_currentConversation");
     id conv = cv ? object_getIvar(messagesCtrl, cv) : nil;
-    if (conv) {
-        NSString *name = nil;
-        Ivar ch = class_getInstanceVariable([conv class], "_chat");
-        id chat = ch ? object_getIvar(conv, ch) : nil;
-        if ([chat respondsToSelector:@selector(displayName)]) {
-            NSString *dn = [chat performSelector:@selector(displayName)];
-            if ([dn isKindOfClass:[NSString class]] && dn.length) name = dn;
+    if (!conv) {
+        // GROUND TRUTH: no conversation selected. User is on the conv list,
+        // even though the chat controller is still mounted. Return nil so all
+        // per-contact reads fall through to globals. Cell-tap pre-apply
+        // bridges the ~1s gap before _currentConversation populates via the
+        // fresh-cache window.
+        if (!cacheFresh) {
+            gWAMCurrentContactName = nil;
+            gWAMCurrentContactDisplayName = nil;
         }
-        if (!name.length) {
-            static const char *nameIvars[] = {"_name", "_displayName", "_groupName", NULL};
-            for (int i = 0; nameIvars[i]; i++) {
-                Ivar v = class_getInstanceVariable([conv class], nameIvars[i]);
-                if (!v) continue;
-                id val = object_getIvar(conv, v);
-                if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
-            }
-        }
-        if (name.length) {
-            gWAMCurrentContactName = [name copy];
-            gWAMCurrentContactDisplayName = [name copy];
-            return name;
-        }
+        return cacheFresh ? gWAMCurrentContactName : nil;
     }
 
+    // _currentConversation is populated — user is in a chat. Extract the name
+    // from chat.displayName (preferred) or a fallback ivar.
+    NSString *name = nil;
+    NSString *cid = nil;
+    Ivar ch = class_getInstanceVariable([conv class], "_chat");
+    id chat = ch ? object_getIvar(conv, ch) : nil;
+    if ([chat respondsToSelector:@selector(displayName)]) {
+        NSString *dn = [chat performSelector:@selector(displayName)];
+        if ([dn isKindOfClass:[NSString class]] && dn.length) name = dn;
+    }
+    if (!name.length) {
+        static const char *nameIvars[] = {"_name", "_displayName", "_groupName", NULL};
+        for (int i = 0; nameIvars[i]; i++) {
+            Ivar v = class_getInstanceVariable([conv class], nameIvars[i]);
+            if (!v) continue;
+            id val = object_getIvar(conv, v);
+            if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
+        }
+    }
+    // Read chatIdentifier solely for background alias maintenance — never used
+    // as the storage key. Lets us detect renames and migrate data.
+    if ([chat respondsToSelector:@selector(chatIdentifier)]) {
+        NSString *c = [chat performSelector:@selector(chatIdentifier)];
+        if ([c isKindOfClass:[NSString class]] && c.length) cid = c;
+    }
+    if (name.length) {
+        if (cid.length) wamReconcileAliasForChat(cid, name);
+        gWAMCurrentContactName = [name copy];
+        gWAMCurrentContactDisplayName = [name copy];
+        return name;
+    }
+    // conv is non-nil but name not readable yet — keep the cache (likely set
+    // by cell-tap moments ago) so per-contact image stays applied.
     return gWAMCurrentContactName;
 }
 
@@ -375,6 +686,124 @@ static BOOL chatHasPerContactOverride(void) {
     NSString *name = getCurrentContactName();
     if (!name.length) return NO;
     return perContactOverridesEnabled(name);
+}
+
+// =====================================================================
+// Chat-identifier alias system — rename resilience for per-chat data.
+//
+// The tap-to-image flow runs entirely on display NAME (works perfectly,
+// instant). But display names change: contacts get renamed in Contacts.app,
+// unnamed groups get titled, etc. Without an anchor we'd orphan the per-chat
+// data on rename.
+//
+// Solution: in the BACKGROUND (well after the tap path completes), the walker
+// reads BOTH chat.displayName AND chat.chatIdentifier whenever they're both
+// readable. We maintain a side table chatIdentifierAliases[chatIdentifier] =
+// lastSeenDisplayName. On every walker hit we compare:
+//   - If alias matches current displayName: no-op.
+//   - If alias holds a DIFFERENT (old) name: rename detected. Move the per-
+//     contact override dict, per-contact blur entry, and image files from
+//     old name → new name. Update the alias.
+//   - If no alias yet: record current displayName under chatIdentifier.
+//
+// The chatIdentifier reliability problem we hit before was about reading it
+// SYNCHRONOUSLY at tap time. As a delayed background anchor it's fine — by
+// the time the walker runs and finds a non-nil chatIdentifier, the value is
+// stable and correct. The tap path never depends on it.
+// =====================================================================
+
+static NSString *getChatAliasName(NSString *chatIdentifier) {
+    NSString *safe = sanitizeContactName(chatIdentifier);
+    if (!safe.length) return nil;
+    NSDictionary *prefs = loadPrefs();
+    NSDictionary *aliases = prefs[@"chatIdentifierAliases"];
+    if (![aliases isKindOfClass:[NSDictionary class]]) return nil;
+    id v = aliases[safe];
+    return [v isKindOfClass:[NSString class]] ? v : nil;
+}
+
+static void setChatAliasName(NSString *chatIdentifier, NSString *displayName) {
+    NSString *safe = sanitizeContactName(chatIdentifier);
+    if (!safe.length || !displayName.length) return;
+    NSString *path = kPrefsPlistPathRootless;
+    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+    if (!prefs) prefs = [NSMutableDictionary new];
+    NSMutableDictionary *aliases = [(NSDictionary *)prefs[@"chatIdentifierAliases"] mutableCopy]
+        ?: [NSMutableDictionary new];
+    aliases[safe] = displayName;
+    prefs[@"chatIdentifierAliases"] = aliases;
+    [prefs writeToFile:path atomically:YES];
+    refreshPrefs();
+}
+
+// Move every piece of per-chat state keyed by sanitized(fromName) over to
+// keys of sanitized(toName). Idempotent — if destination already exists, the
+// incoming entries take precedence (we assume the rename means "this chat is
+// now this name", so the freshly-active key wins). Touches the prefs plist
+// once at the end to avoid mid-migration races on disk.
+static void migratePerChatData(NSString *fromName, NSString *toName) {
+    NSString *fromSafe = sanitizeContactName(fromName);
+    NSString *toSafe = sanitizeContactName(toName);
+    if (!fromSafe.length || !toSafe.length) return;
+    if ([fromSafe isEqualToString:toSafe]) return;
+    NSString *path = kPrefsPlistPathRootless;
+    NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
+    if (!prefs) return;
+    BOOL dirty = NO;
+    // perContactOverrides[from] → perContactOverrides[to]
+    NSMutableDictionary *overrides = [(NSDictionary *)prefs[@"perContactOverrides"] mutableCopy];
+    NSDictionary *fromOverrides = overrides[fromSafe];
+    if ([fromOverrides isKindOfClass:[NSDictionary class]]) {
+        overrides[toSafe] = fromOverrides;
+        [overrides removeObjectForKey:fromSafe];
+        prefs[@"perContactOverrides"] = overrides;
+        dirty = YES;
+    }
+    // perContactBlur[from] → perContactBlur[to]
+    NSMutableDictionary *blurMap = [(NSDictionary *)prefs[@"perContactBlur"] mutableCopy];
+    id fromBlur = blurMap[fromSafe];
+    if (fromBlur) {
+        blurMap[toSafe] = fromBlur;
+        [blurMap removeObjectForKey:fromSafe];
+        prefs[@"perContactBlur"] = blurMap;
+        dirty = YES;
+    }
+    if (dirty) {
+        [prefs writeToFile:path atomically:YES];
+        refreshPrefs();
+    }
+    // Rename per-contact image files on disk (light + dark).
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *fromLight = getPerContactImagePath(fromName, NO);
+    NSString *toLight = getPerContactImagePath(toName, NO);
+    if (fromLight && toLight && [fm fileExistsAtPath:fromLight]) {
+        [fm removeItemAtPath:toLight error:nil];
+        [fm moveItemAtPath:fromLight toPath:toLight error:nil];
+    }
+    NSString *fromDark = getPerContactImagePath(fromName, YES);
+    NSString *toDark = getPerContactImagePath(toName, YES);
+    if (fromDark && toDark && [fm fileExistsAtPath:fromDark]) {
+        [fm removeItemAtPath:toDark error:nil];
+        [fm moveItemAtPath:fromDark toPath:toDark error:nil];
+    }
+}
+
+// Single chokepoint — called by the walker when it has both a chatIdentifier
+// and a current displayName in hand. Detects renames and migrates data.
+static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *displayName) {
+    if (!chatIdentifier.length || !displayName.length) return;
+    NSString *prevName = getChatAliasName(chatIdentifier);
+    if (prevName.length && ![prevName isEqualToString:displayName]) {
+        migratePerChatData(prevName, displayName);
+        setChatAliasName(chatIdentifier, displayName);
+        // Migration just landed data under the new name. Post the refresh so
+        // updateChatBackground re-runs RIGHT NOW with the migrated data — the
+        // user sees the per-contact image instead of waiting for the next
+        // retry tick (which would leave a brief flash of the global).
+        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    } else if (!prevName.length) {
+        setChatAliasName(chatIdentifier, displayName);
+    }
 }
 
 // During a trigger call, return the explicit name the trigger captured (so the
@@ -741,6 +1170,18 @@ UIColor *getTitleTextColor() {
     return colorFromHex(effectiveValueForKey(key)) ?: [UIColor whiteColor];
 }
 
+// Conv list variant: reads the GLOBAL value, never per-contact. The conv list
+// shows many chats side-by-side; rendering all cells with one chat's per-
+// contact color is wrong by design. Used by every conv-list-only call site
+// (cell layout, controller-wide updateAllColors, UILabel.setTextColor when
+// the label is inside a conv list cell). Chat-view callers still use the
+// effectiveValueForKey-aware getTitleTextColor().
+UIColor *getTitleTextColorConvList() {
+    NSDictionary *prefs = loadPrefs();
+    NSString *key = isDarkMode() ? @"titleTextColorDark" : @"titleTextColor";
+    return colorFromHex(prefs[key]) ?: [UIColor whiteColor];
+}
+
 UIColor *getMessagePreviewTextColor() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"messagePreviewTextColorDark" : @"messagePreviewTextColor";
@@ -985,7 +1426,7 @@ void applyCustomTextColors(UIView *view) {
 
     if ([view isKindOfClass:%c(CKLabel)]) {
         UILabel *label = (UILabel *)view;
-        UIColor *custom = enabled ? getTitleTextColor() : nil;
+        UIColor *custom = enabled ? getTitleTextColorConvList() : nil;
         if (custom) {
             if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
                 objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2764,6 +3205,82 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 - (UIColor *)tintColor {
     if (!isTweakEnabled()) return %orig;
 
+    // EARLY BAIL: search bars in the conv list (the "Search" field with the
+    // magnifying-glass + mic icons) must stay default-tinted — they're
+    // standard iOS UI, not part of any per-contact decoration. This check
+    // runs before the conv list / navbar bypasses so the bypasses can't
+    // accidentally global-tint them.
+    {
+        UIView *sp = self;
+        int shops = 0;
+        while (sp && shops < 30) {
+            if ([sp isKindOfClass:%c(UISearchBar)] ||
+                [sp isKindOfClass:%c(_UISearchBarSearchFieldBackgroundView)] ||
+                [sp isKindOfClass:%c(UISearchTextField)]) {
+                return %orig;
+            }
+            sp = sp.superview;
+            shops++;
+        }
+    }
+
+    // If this view is rendered inside the conv list (cell, pinned bubble,
+    // anywhere under a CKConversationListCollectionViewController), force
+    // the GLOBAL tint regardless of what the per-contact system thinks.
+    // The conv list shows multiple chats, so per-contact has no meaning here.
+    {
+        UIView *p = self;
+        Class convListCellCls = %c(CKConversationListCollectionViewConversationCell);
+        Class pinnedViewCls = %c(CKPinnedConversationView);
+        Class pinnedBubbleCls = %c(CKPinnedConversationSummaryBubble);
+        int hops = 0;
+        while (p && hops < 30) {
+            if ((convListCellCls && [p isKindOfClass:convListCellCls]) ||
+                (pinnedViewCls && [p isKindOfClass:pinnedViewCls]) ||
+                (pinnedBubbleCls && [p isKindOfClass:pinnedBubbleCls])) {
+                NSDictionary *prefs = loadPrefs();
+                NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
+                UIColor *globalTint = colorFromHex(prefs[key]);
+                if (globalTint) return globalTint;
+                return %orig;
+            }
+            // STRUCTURAL navbar bypass — when we find a UINavigationBar in
+            // the ancestor chain, ask its owning nav controller what its
+            // topViewController currently is. If that's the conv list
+            // controller, this navbar element belongs to the conv list and
+            // should use globals. This is instant — topViewController flips
+            // synchronously on push/pop, no heartbeat lag, no oscillation.
+            if ([p isKindOfClass:[UINavigationBar class]]) {
+                UINavigationBar *bar = (UINavigationBar *)p;
+                id delegate = bar.delegate;
+                UIViewController *topVC = nil;
+                if ([delegate isKindOfClass:[UINavigationController class]]) {
+                    topVC = [(UINavigationController *)delegate topViewController];
+                }
+                if (topVC && [topVC isKindOfClass:%c(CKConversationListCollectionViewController)]) {
+                    NSDictionary *prefs = loadPrefs();
+                    NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
+                    UIColor *globalTint = colorFromHex(prefs[key]);
+                    if (globalTint) return globalTint;
+                    return %orig;
+                }
+            }
+            // Also check responder chain for the conv list controller.
+            if ([p respondsToSelector:@selector(_viewControllerForAncestor)]) {
+                UIViewController *vc = [p _viewControllerForAncestor];
+                if (vc && [vc isKindOfClass:%c(CKConversationListCollectionViewController)]) {
+                    NSDictionary *prefs = loadPrefs();
+                    NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
+                    UIColor *globalTint = colorFromHex(prefs[key]);
+                    if (globalTint) return globalTint;
+                    return %orig;
+                }
+            }
+            p = p.superview;
+            hops++;
+        }
+    }
+
     UIColor *customTint = getSystemTintColor();
     if (!customTint) return %orig;
 
@@ -2899,6 +3416,18 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %hook CKConversationListCollectionViewController
 
+// Detect conv list view entering/leaving its window. Cheap dedupe via
+// associated object. Two transitions handled:
+//   not-in-window → in-window: user is going back to the conv list (or mid-
+//     swipe). Clear the stale per-contact cache and force the conv list to
+//     repaint with globals so there's no per-contact flash. Walker reads
+//     _currentConversation as ground truth — if iOS hasn't actually cleared
+//     it (half-swipe in progress), walker will return the chat name again
+//     on its next call and per-contact paints back.
+//   in-window → not-in-window: user committed back INTO the chat (e.g. after
+//     a cancelled swipe). Force the messages controller to re-read state
+//     and reapply per-contact colors so the chat doesn't stay on globals.
+
 -(void)viewWillAppear:(BOOL)animated {
     %orig;
     // The conv list reads globals automatically now — getCurrentContactName
@@ -2913,6 +3442,17 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 -(void)viewDidAppear:(BOOL)animated {
     %orig;
+    if (isTweakEnabled()) {
+        // The chat's viewWillDisappear posts kPrefsChangedNotification mid-pop,
+        // but at that moment the conv list's collection view has no visible
+        // cells yet (they're still being brought back by the pop animation),
+        // so updateAllColors iterates an empty visibleCells array and nothing
+        // gets repainted. By viewDidAppear, the cells are mounted and visible —
+        // force the redraw here so the title color, tint, bubble colors, etc.
+        // snap back to globals THE INSTANT the user lands on the list,
+        // instead of waiting for the user to scroll a stale cell off-screen.
+        [self handlePrefsChanged];
+    }
     if (!isTweakEnabled() || gWAMChangelogShownThisLaunch) return;
     if (!shouldShowChangelog()) return;
     gWAMChangelogShownThisLaunch = YES;
@@ -2989,7 +3529,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %new
 -(void)applyCustomColorsToCKLabelsInView:(UIView *)view {
-    UIColor *custom = isCustomTextColorsEnabled() ? getTitleTextColor() : nil;
+    UIColor *custom = isCustomTextColorsEnabled() ? getTitleTextColorConvList() : nil;
     for (UIView *subview in view.subviews) {
         if ([subview isKindOfClass:%c(CKLabel)]) {
             UILabel *label = (UILabel *)subview;
@@ -3180,6 +3720,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if ([name isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [name copy];
     gWAMCurrentContactDisplayName = [name copy];
+    gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
     Class messagesCtrlClass = %c(CKMessagesController);
     NSMutableArray *winList = [NSMutableArray array];
     if (@available(iOS 13.0, *)) {
@@ -3199,6 +3740,17 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
+    // Background rename-detection — pull chatIdentifier off the cell's
+    // conversation via the list controller (independent of the laggy
+    // CKMessagesController._currentConversation ivar) and reconcile the
+    // alias. Deferred to the next runloop tick so the tap-completion path
+    // iOS runs after setHighlighted: returns isn't blocked by our work.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        wamReconcileAliasFromTappedView(strongSelf);
+    });
 }
 
 -(void)layoutSubviews {
@@ -3240,7 +3792,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     if (isInConversationCell) {
         if ([self isKindOfClass:%c(CKLabel)]) {
-            %orig(getTitleTextColor());
+            %orig(getTitleTextColorConvList());
         } else if ([self isKindOfClass:%c(CKDateLabel)]) {
             %orig(getDateTimeTextColor());
         } else if ([self isKindOfClass:%c(UIDateLabel)]) {
@@ -3974,6 +4526,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if ([captured isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [captured copy];
     gWAMCurrentContactDisplayName = [captured copy];
+    gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
 
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return;
@@ -3999,6 +4552,15 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
+    // See unpinned hook for rationale. Schedule the chatIdentifier lookup +
+    // alias reconcile on the next runloop tick so the tap path completes
+    // without interference; migration lands within ~1 tick of the tap.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        wamReconcileAliasFromTappedView(strongSelf);
+    });
 }
 
 - (void)didMoveToWindow {
@@ -4295,6 +4857,11 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 -(void)viewWillAppear:(BOOL)animated {
     %orig;
     if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
+    // Flag flips ON here — getCurrentContactName will now return the active
+    // chat's name (allowing per-contact reads); previously it was returning
+    // nil because the flag was off (or never reached, since the conv list
+    // was the active surface).
+    gWAMChatIsActiveSurface = YES;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
 }
 
@@ -4328,6 +4895,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (!isPerContactChatBgEnabled()) return;
 
     NSString *name = nil;
+    NSString *cid = nil;
     Ivar ch = class_getInstanceVariable([conversation class], "_chat");
     id chat = ch ? object_getIvar(conversation, ch) : nil;
     if ([chat respondsToSelector:@selector(displayName)]) {
@@ -4343,18 +4911,108 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
             if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
         }
     }
+    if ([chat respondsToSelector:@selector(chatIdentifier)]) {
+        NSString *c = [chat performSelector:@selector(chatIdentifier)];
+        if ([c isKindOfClass:[NSString class]] && c.length) cid = c;
+    }
     if (!name.length) return;
+    if (cid.length) wamReconcileAliasForChat(cid, name);
     gWAMCurrentContactName = [name copy];
     gWAMCurrentContactDisplayName = [name copy];
     gWAMTriggerNameOverride = name;
     [self updateChatBackground];
     gWAMTriggerNameOverride = nil;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    // Invalidate the navbar's UIKit tint cache so the back/FaceTime buttons
+    // re-query our tintColor hook with the now-populated chat name. Without
+    // this, those buttons stay at whatever tint they cached at construction
+    // time (typically global, since they were created before _currentConversation
+    // was set) until something else fires tintColorDidChange — like visiting
+    // the details pane and coming back.
+    NSMutableArray *winList = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                [winList addObjectsFromArray:((UIWindowScene *)scene).windows];
+            }
+        }
+    }
+    for (UIWindow *w in winList) {
+        UIView *navBar = nil;
+        NSMutableArray *queue = [NSMutableArray arrayWithObject:w];
+        while (queue.count) {
+            UIView *v = queue.firstObject;
+            [queue removeObjectAtIndex:0];
+            if ([v isKindOfClass:[UINavigationBar class]]) { navBar = v; break; }
+            [queue addObjectsFromArray:v.subviews];
+        }
+        if (navBar) {
+            [navBar tintColorDidChange];
+        }
+    }
 }
 
 -(void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     %orig;
+}
+
+%new
+- (void)wamClearChatAndForceRefresh {
+    // The single chokepoint for "user left a chat" cleanup. Called from
+    // every lifecycle path that might mean "no chat is active anymore":
+    // viewWillDisappear-with-pop, viewDidDisappear-with-pop,
+    // didMoveToParentViewController:nil. Idempotent — safe to invoke
+    // multiple times. If the flag is already off, just no-ops on the state
+    // changes but still fires the redraws (cheap and corrects any drift).
+    if (gWAMChatIsActiveSurface) {
+        gWAMChatIsActiveSurface = NO;
+        gWAMCurrentContactName = nil;
+        gWAMCurrentContactDisplayName = nil;
+    }
+    [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    // Walk every window in every scene, find the conv list controller and
+    // ANY visible view, and force a tint + layout + display refresh. This
+    // bypasses the notification observer chain entirely — useful when the
+    // observer fires too early (cells not mounted yet) or when iPad split-
+    // view paths skip the appearance lifecycle altogether.
+    Class listCls = %c(CKConversationListCollectionViewController);
+    NSMutableArray *winList = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                [winList addObjectsFromArray:((UIWindowScene *)scene).windows];
+            }
+        }
+    }
+    for (UIWindow *w in winList) {
+        if (listCls) {
+            UIViewController *listVC = wamFindVCInHierarchy(w.rootViewController, listCls);
+            if (listVC && [listVC respondsToSelector:@selector(handlePrefsChanged)]) {
+                [listVC performSelector:@selector(handlePrefsChanged)];
+            }
+        }
+        wamForceVisualRefresh(w);
+    }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (self.isMovingFromParentViewController || self.isBeingDismissed) {
+        [self wamClearChatAndForceRefresh];
+    }
+}
+
+- (void)didMoveToParentViewController:(UIViewController *)parent {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // parent == nil means this controller has just been removed from its
+    // parent's childViewControllers — fully popped / fully dismissed. The
+    // single most reliable signal that the user has actually left the chat.
+    if (!parent) {
+        [self wamClearChatAndForceRefresh];
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -4365,9 +5023,44 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     // walker misses; nulling it here is what keeps the conv list clean
     // after we leave the chat.
     if (isTweakEnabled() && (self.isMovingFromParentViewController || self.isBeingDismissed)) {
+        // Flag OFF — walker now returns nil for everyone that asks. Every
+        // effectiveValueForKey read falls back to globals, so the conv list
+        // (and anything else not in a chat) shows globals immediately.
+        gWAMChatIsActiveSurface = NO;
         gWAMCurrentContactName = nil;
         gWAMCurrentContactDisplayName = nil;
         [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+        // Cells in the conv list may not yet be mounted at this moment (the
+        // pop animation is still bringing them back into view). Fire the
+        // notification several more times over the next 500ms so whenever the
+        // cells are actually visible, their observer gets a refresh signal.
+        // Also do a hard, direct redraw: walk every window, find every live
+        // conv list controller, call handlePrefsChanged on it — guarantees a
+        // repaint even on iPad / split-view paths where viewDidAppear may
+        // never fire on the conv list because it never "appeared" (it was
+        // always visible behind the chat panel).
+        for (int i = 1; i <= 5; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.1 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+                Class listCls = %c(CKConversationListCollectionViewController);
+                if (!listCls) return;
+                NSMutableArray *winList = [NSMutableArray array];
+                if (@available(iOS 13.0, *)) {
+                    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                        if ([scene isKindOfClass:[UIWindowScene class]]) {
+                            [winList addObjectsFromArray:((UIWindowScene *)scene).windows];
+                        }
+                    }
+                }
+                for (UIWindow *w in winList) {
+                    UIViewController *listVC = wamFindVCInHierarchy(w.rootViewController, listCls);
+                    if (listVC && [listVC respondsToSelector:@selector(handlePrefsChanged)]) {
+                        [listVC performSelector:@selector(handlePrefsChanged)];
+                    }
+                }
+            });
+        }
     }
     %orig;
 }
@@ -4399,11 +5092,18 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     // nothing changed (same name, same image), it returns early without
     // touching the view hierarchy, so this is cheap on the no-change path.
     [self updateChatBackground];
-    // Adaptive cadence: tight (200ms) for the first 3s after appearing to
-    // catch cold-start name population fast, then 500ms forever to detect
-    // chat panel switches (same controller, different conversation — no
-    // lifecycle event fires for that case).
-    NSTimeInterval delay = (attempt < 15) ? 0.2 : 0.5;
+    // Three-stage cadence:
+    //   • 50ms for the first 6 ticks (~300ms total) — race the walker against
+    //     iOS's first frame so post-rename migration lands before the user
+    //     sees a global-image flash.
+    //   • 200ms for the next ~3s — catches cold-start name population where
+    //     _currentConversation takes a while to wire up.
+    //   • 500ms thereafter — detects chat-panel switches inside the reused
+    //     controller without burning CPU.
+    NSTimeInterval delay;
+    if (attempt < 6)       delay = 0.05;
+    else if (attempt < 21) delay = 0.2;
+    else                   delay = 0.5;
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
@@ -8095,6 +8795,7 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     if ([captured isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [captured copy];
     gWAMCurrentContactDisplayName = [captured copy];
+    gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
 
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return;
@@ -8120,6 +8821,15 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
+    // See unpinned hook for rationale. Schedule the chatIdentifier lookup +
+    // alias reconcile on the next runloop tick so the tap path completes
+    // without interference; migration lands within ~1 tick of the tap.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        wamReconcileAliasFromTappedView(strongSelf);
+    });
 }
 
 - (void)didMoveToWindow {
@@ -8153,10 +8863,23 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 %new
 - (void)updateWAMPinnedColors {
     NSDictionary *prefs = loadPrefs();
-    WAMPinnedBubbleLightColor = colorFromHex(prefs[@"pinnedBubbleColor"]) ?: getReceivedBubbleColor();
-    WAMPinnedBubbleDarkColor = colorFromHex(prefs[@"pinnedBubbleColorDark"]) ?: getReceivedBubbleColor();
-    WAMPinnedTextLightColor = colorFromHex(prefs[@"pinnedBubbleTextColor"]) ?: getReceivedTextColor();
-    WAMPinnedTextDarkColor = colorFromHex(prefs[@"pinnedBubbleTextColorDark"]) ?: getReceivedTextColor();
+    // Pinned bubbles live in the conv list — they're rendered on a surface
+    // that shows multiple chats at once, so per-contact values would be
+    // wrong (whose contact's color do you pick?). When the user hasn't set
+    // an explicit pinnedBubbleColor pref, fall back to the GLOBAL received
+    // bubble color (read prefs directly, never effectiveValueForKey). Without
+    // this bypass the fallback would inherit the active chat's per-contact
+    // received bubble color, freezing it into WAMPinnedBubbleCurrentColor and
+    // making pinned previews stay tinted with the last-viewed chat's color
+    // long after the user has left that chat.
+    NSString *recvKey = isDarkMode() ? @"receivedBubbleColorDark" : @"receivedBubbleColor";
+    NSString *recvTextKey = isDarkMode() ? @"receivedTextColorDark" : @"receivedTextColor";
+    UIColor *globalRecv = colorFromHex(prefs[recvKey]) ?: [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    UIColor *globalRecvText = colorFromHex(prefs[recvTextKey]);
+    WAMPinnedBubbleLightColor = colorFromHex(prefs[@"pinnedBubbleColor"]) ?: globalRecv;
+    WAMPinnedBubbleDarkColor = colorFromHex(prefs[@"pinnedBubbleColorDark"]) ?: globalRecv;
+    WAMPinnedTextLightColor = colorFromHex(prefs[@"pinnedBubbleTextColor"]) ?: globalRecvText;
+    WAMPinnedTextDarkColor = colorFromHex(prefs[@"pinnedBubbleTextColorDark"]) ?: globalRecvText;
 
     BOOL dark = NO;
     if (@available(iOS 13.0, *)) {
@@ -9568,6 +10291,7 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     NSString *captured = best.text;
     if (!captured.length) return;
     gWAMCurrentContactName = [captured copy];
+    gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
 
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return;
@@ -9593,6 +10317,9 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
+    // No tap-driven alias reconcile here — nav bar isn't a cell, so the
+    // indexPath-based conv lookup wouldn't find anything. The walker's
+    // retry loop covers alias refresh when the nav title is the active surface.
 }
 
 - (void)didMoveToWindow {
@@ -9701,6 +10428,14 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         NULL,
         CFNotificationSuspensionBehaviorCoalesce
     );
+
+    // Kick off the heartbeat — runs every frame whenever no chat is the
+    // active surface, force-applying global colors to conv list cells. This
+    // is the safety net that catches every code path our lifecycle hooks
+    // miss (iPad split-view, custom transitions, anything weird in iOS 26).
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [WAMHeartbeatTarget shared];
+    });
 }
 
 /* Made with love from the Show Me State. Support small content creators and local farmers! */

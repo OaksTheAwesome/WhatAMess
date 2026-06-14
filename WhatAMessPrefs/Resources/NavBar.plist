@@ -76,6 +76,22 @@
 			<key>action</key>
 			<string>pickNavBarTintColor</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>Chat Contact Name</string>
+			<key>footerText</key>
+			<string>Color applied to the contact name shown in the chat navigation bar AND on the details view header. Can be overridden per chat in that chat's customization menu.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>Choose Contact Name Color</string>
+			<key>action</key>
+			<string>pickChatContactNameColor</string>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>NavBar Settings</string>

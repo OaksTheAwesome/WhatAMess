@@ -17,4 +17,8 @@
     [self showColorPickerForKey:@"navBarTintColor" defaultColor:[UIColor systemBlueColor]];
 }
 
+- (void)pickChatContactNameColor {
+    [self showColorPickerForKey:@"chatContactNameColor" defaultColor:[UIColor whiteColor]];
+}
+
 @end

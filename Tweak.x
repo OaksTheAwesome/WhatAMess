@@ -51,65 +51,19 @@ static NSString * const kWAMGitHubURL = @"https://github.com/OaksTheAwesome/What
 static NSMutableDictionary *cachedPrefs = nil;
 static BOOL gWAMIsDarkModeOnIOS15 = NO;
 static BOOL gWAMChangelogShownThisLaunch = NO;
-// Cache populated by the trigger hooks (cell tap, pinned tap, navbar layout,
-// Details label, setCurrentConversation) and by getCurrentContactName.
-// Used only as a fallback when the walk can't find the messages controller.
-// STORAGE KEY — stable identifier for the active chat. Set to the IMChat's
-// chatIdentifier (group GUID for groups, handle/phone/email for 1:1 chats).
-// Does not change as iOS Messages resolves contact names asynchronously.
 static NSString *gWAMCurrentContactName = nil;
-// UI DISPLAY NAME — human-readable name for the active chat. Used only for
-// the per-chat menu's header title. Can be nil/empty if iOS hasn't resolved
-// a display name yet; storage doesn't depend on this.
 static NSString *gWAMCurrentContactDisplayName = nil;
-// Transient per-call argument — set immediately before updateChatBackground and
-// cleared right after. Lets the trigger hook's freshly-captured name win over
-// the _currentConversation ivar walk, which lags during chat switch.
 static NSString *gWAMTriggerNameOverride = nil;
-// Legacy flag, kept around because several lifecycle hooks still set it. The
-// walker no longer consults it — see comments in getCurrentContactName for
-// the actual ground-truth signal (CKMessagesController._currentConversation).
 static BOOL gWAMChatIsActiveSurface = NO;
-// Wall-clock time when gWAMCurrentContactName was last set by a tap-driven
-// pre-apply (cell setHighlighted: / pinned touchesBegan:). Used by the walker
-// to bridge the brief gap between the tap and iOS Messages populating
-// _currentConversation on the chat controller (~1 second on this iOS build).
-// Outside that window, _currentConversation is the sole truth.
 static NSTimeInterval gWAMCacheSetAt = 0;
-// Set by the heartbeat to true whenever a CKConversationListCollectionViewController
-// instance has its view in a window. This is the synchronous signal the
-// tintColor hook uses to decide whether navbar elements should bypass the
-// per-contact tint and use the global value instead — without it the navbar
-// flashes per-contact colors during the chat→list transition before
-// _currentConversation gets cleared.
 static BOOL gWAMConvListViewVisible = NO;
-// Authoritative "are we actively rendering inside a chat right now?" flag.
 static NSString *getActiveContactNameForBg(void);
-// Forward decls for the chatIdentifier alias system — defined further down
-// next to the per-contact storage helpers. The walker calls into them
-// whenever it reads both displayName and chatIdentifier off a CKConversation.
 static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *displayName);
-// Forward decls for the heartbeat — these live in the color helpers section
-// further down, but the heartbeat's tick uses them.
 BOOL isCustomTextColorsEnabled(void);
 BOOL isTweakEnabled(void);
 UIColor *getTitleTextColorConvList(void);
 static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class targetClass);
 
-// Recursively look through children + presented for a VC of `targetClass`.
-// The previous walker only followed `presentedViewController`, which on
-// iPhone push-nav never crosses the UINavigationController barrier — meaning
-// CKMessagesController was never actually found and we always fell back to a
-// cached name. This version finds it in any nav stack, split view, or tab.
-// Walk UP from a touched view (cell content, pinned bubble, etc.) to find the
-// containing collection view, get this cell's indexPath, look up the list
-// controller via the responder chain, and ask it for the conversation at that
-// indexPath. Used by the rename-alias path to extract chatIdentifier without
-// waiting for CKMessagesController._currentConversation to catch up (which on
-// iPad split-view can lag the user's visible chat by many seconds).
-//
-// MUST be called asynchronously off the tap path — calling conversationAtIndexPath:
-// synchronously during selection blocks iOS's tap handling.
 static id wamConversationFromTappedView(UIView *view) {
     if (!view) return nil;
     UIView *cell = view;
@@ -138,9 +92,6 @@ static id wamConversationFromTappedView(UIView *view) {
     return fn(listVC, @selector(conversationAtIndexPath:), ip);
 }
 
-// Reconcile the alias for a freshly-tapped cell. Pulls displayName + chatIdentifier
-// off the conversation found via wamConversationFromTappedView, then routes
-// through wamReconcileAliasForChat for migration. Cheap on the no-rename path.
 static void wamReconcileAliasFromTappedView(UIView *view) {
     id conv = wamConversationFromTappedView(view);
     if (!conv) return;
@@ -161,13 +112,45 @@ static void wamReconcileAliasFromTappedView(UIView *view) {
     }
 }
 
-// Force every view in a hierarchy to invalidate tint + layout + display. Used
-// when leaving a chat — UIKit caches tintColor effects and doesn't always
-// re-query our overridden getter unless something fires tintColorDidChange.
-// Combined with setNeedsLayout + setNeedsDisplay, this guarantees a full
-// visual refresh on the next frame.
+static BOOL wamNavBarShouldUseGlobals(UIView *view) {
+    if (!view) return NO;
+    UIView *p = view;
+    int hops = 0;
+    while (p && hops < 30) {
+        if ([p isKindOfClass:[UINavigationBar class]]) {
+            UINavigationBar *bar = (UINavigationBar *)p;
+            id delegate = bar.delegate;
+            UINavigationController *nav = nil;
+            if ([delegate isKindOfClass:[UINavigationController class]]) {
+                nav = (UINavigationController *)delegate;
+            }
+            UIViewController *destVC = nil;
+            if (nav) {
+                id<UIViewControllerTransitionCoordinator> tc = nav.transitionCoordinator;
+                if (tc) {
+                    destVC = [tc viewControllerForKey:UITransitionContextToViewControllerKey];
+                }
+                if (!destVC) destVC = nav.topViewController;
+            }
+            if (destVC && [destVC isKindOfClass:%c(CKConversationListCollectionViewController)]) {
+                return YES;
+            }
+            return NO;
+        }
+        p = p.superview;
+        hops++;
+    }
+    return NO;
+}
+
 static void wamForceVisualRefresh(UIView *view) {
     if (!view) return;
+    Class pinnedBubbleCls = %c(CKPinnedConversationSummaryBubble);
+    Class pinnedViewCls = %c(CKPinnedConversationView);
+    if ((pinnedBubbleCls && [view isKindOfClass:pinnedBubbleCls]) ||
+        (pinnedViewCls && [view isKindOfClass:pinnedViewCls])) {
+        return;
+    }
     [view tintColorDidChange];
     [view setNeedsLayout];
     [view setNeedsDisplay];
@@ -176,16 +159,9 @@ static void wamForceVisualRefresh(UIView *view) {
     }
 }
 
-// EXTREME force-apply: walk every subview, find every CKLabel that lives
-// inside a conv list cell, and DIRECTLY force-set its textColor to the
-// current global value. Bypasses lifecycle, layout, and reloadData entirely.
-// Run on a CADisplayLink so it executes every frame whenever no chat is the
-// active surface — guarantees the conv list snaps to globals the instant
-// the chat is gone, regardless of which lifecycle path led there.
 static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     if (!view) return;
     Class cellCls = %c(CKConversationListCollectionViewConversationCell);
-    Class pinnedBubbleCls = %c(CKPinnedConversationSummaryBubble);
     if ([view isKindOfClass:%c(CKLabel)]) {
         // Confirm this label is inside a conv list cell.
         UIView *p = view.superview;
@@ -202,30 +178,11 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
             }
         }
     }
-    // Pinned conversation bubbles cache their bubble color in static globals
-    // (WAMPinnedBubbleCurrentColor etc.) — that cache gets baked when the
-    // bubble first lays out while a chat is active, and inherits that chat's
-    // per-contact color via getReceivedBubbleColor's fallback. Force a fresh
-    // updateWAMPinnedColors+applyPinnedBubbleStyle here so the cache is
-    // rebuilt against the CURRENT (global) state every frame the chat isn't
-    // active. updateWAMPinnedColors is cheap; applyPinnedBubbleStyle does a
-    // dedupe-equivalent check internally.
-    if (pinnedBubbleCls && [view isKindOfClass:pinnedBubbleCls]) {
-        if ([view respondsToSelector:@selector(updateWAMPinnedColors)]) {
-            [view performSelector:@selector(updateWAMPinnedColors)];
-        }
-        if ([view respondsToSelector:@selector(applyPinnedBubbleStyle)]) {
-            [view performSelector:@selector(applyPinnedBubbleStyle)];
-        }
-    }
     for (UIView *sub in view.subviews) {
         wamForceGlobalColorsOnConvListLabels(sub);
     }
 }
 
-// Heartbeat tick — fires every frame via CADisplayLink. Cheap on the no-
-// change path (one window walk, one ivar read per view). When the chat is
-// not the active surface, force the conv list to globals.
 @interface WAMHeartbeatTarget : NSObject
 + (instancetype)shared;
 - (void)tick;
@@ -254,9 +211,6 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
             }
         }
     }
-    // INDEPENDENT detection — don't trust the flag. Walk windows ourselves
-    // and decide if any chat is visibly active. A chat is "active" iff a
-    // CKMessagesController exists with its view loaded AND in a window.
     Class messagesCls = %c(CKMessagesController);
     BOOL chatIsVisible = NO;
     UIViewController *foundCtrl = nil;
@@ -270,18 +224,12 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
             }
         }
     }
-    // Detect chat-vs-conv-list by reading _currentConversation on the found
-    // chat controller — that's the ground truth on iOS 26 (CKMessagesController
-    // is the app's root VC and stays mounted; only the ivar flips).
     id conv = nil;
     if (foundCtrl) {
         Ivar cv = class_getInstanceVariable([foundCtrl class], "_currentConversation");
         conv = cv ? object_getIvar(foundCtrl, cv) : nil;
     }
     chatIsVisible = (conv != nil);
-    // Track conv list view visibility — used by the UIView.tintColor hook to
-    // structurally force globals on navbar elements when the conv list is
-    // showing (no walker timing dependency).
     Class listCls = %c(CKConversationListCollectionViewController);
     BOOL listInWindow = NO;
     if (listCls) {
@@ -295,9 +243,6 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     }
     static BOOL prevListVisible = NO;
     static NSString *prevTopVCClass = nil;
-    // Also locate the nav controller and read its topViewController class —
-    // we want to verify this is a sharper signal than view.window for the
-    // chat↔list transition.
     Class navCls = %c(CKNavigationController);
     NSString *topVCClass = @"(none)";
     if (navCls && foundCtrl) {
@@ -317,27 +262,19 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
         prevTopVCClass = [topVCClass copy];
     }
     gWAMConvListViewVisible = listInWindow;
-    // SYNC the flag with reality. If lifecycle hooks didn't fire for whatever
-    // reason (iPad split-view, custom transitions, etc.), this brings the
-    // state back to truth.
     static BOOL prevChatVisible = NO;
     BOOL stateChanged = (chatIsVisible != prevChatVisible);
     prevChatVisible = chatIsVisible;
     if (chatIsVisible) {
         gWAMChatIsActiveSurface = YES;
-        return;  // chat is the surface; let per-contact paint
+        return;
     }
-    // No chat visible — ensure flag is off and any stale cache is cleared.
     if (gWAMChatIsActiveSurface) {
         gWAMChatIsActiveSurface = NO;
         gWAMCurrentContactName = nil;
         gWAMCurrentContactDisplayName = nil;
         [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
     }
-    // On the transition frame (chat just disappeared), do the expensive full-
-    // hierarchy tint/layout/display invalidation so UIKit re-queries our
-    // tintColor getter for every view. On steady-state frames, only do the
-    // cheap CKLabel force-set.
     for (UIWindow *w in winList) {
         wamForceGlobalColorsOnConvListLabels(w);
         if (stateChanged) {
@@ -360,28 +297,7 @@ static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class target
     return nil;
 }
 
-// Authoritative name of the currently-visible chat — or nil if no chat is the
-// active surface (conv list, settings, etc.). Walks the full window hierarchy
-// to find a live CKMessagesController, then verifies that controller is still
-// in its nav stack (so a chat with details pushed on top still counts, but a
-// chat that has just been popped doesn't). Reads the conversation name
-// directly from the live controller every time — no cache fallback that
-// could pollute the conv list with the last-seen chat's name.
 static NSString *getCurrentContactName(void) {
-    // GROUND TRUTH on iOS 26 Messages: CKMessagesController is the app's root
-    // VC and is ALWAYS mounted full-screen. Lifecycle hooks (viewWillAppear/
-    // Disappear, didMoveToParent) never fire when the user "leaves" a chat —
-    // they just see the conv list view, which is embedded inside the chat
-    // controller's own VC tree. The only reliable signal for "no chat is
-    // active right now" is CKMessagesController._currentConversation == nil.
-    //
-    // Logged behavior in production:
-    //   conv list visible → _currentConversation = nil
-    //   chat selected    → _currentConversation = <non-nil CKConversation>
-    //
-    // We honor a brief cache window so cell-tap pre-apply (which sets the
-    // cache then immediately calls updateChatBackground) still works during
-    // the ~1 second before iOS Messages populates _currentConversation.
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return nil;
 
@@ -408,19 +324,12 @@ static NSString *getCurrentContactName(void) {
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
     BOOL cacheFresh = gWAMCurrentContactName.length && (now - gWAMCacheSetAt) < 2.0;
     if (!messagesCtrl) {
-        // No chat controller at all → fall back to fresh cache (tap pre-apply
-        // race) or nil.
         return cacheFresh ? gWAMCurrentContactName : nil;
     }
 
     Ivar cv = class_getInstanceVariable([messagesCtrl class], "_currentConversation");
     id conv = cv ? object_getIvar(messagesCtrl, cv) : nil;
     if (!conv) {
-        // GROUND TRUTH: no conversation selected. User is on the conv list,
-        // even though the chat controller is still mounted. Return nil so all
-        // per-contact reads fall through to globals. Cell-tap pre-apply
-        // bridges the ~1s gap before _currentConversation populates via the
-        // fresh-cache window.
         if (!cacheFresh) {
             gWAMCurrentContactName = nil;
             gWAMCurrentContactDisplayName = nil;
@@ -428,8 +337,6 @@ static NSString *getCurrentContactName(void) {
         return cacheFresh ? gWAMCurrentContactName : nil;
     }
 
-    // _currentConversation is populated — user is in a chat. Extract the name
-    // from chat.displayName (preferred) or a fallback ivar.
     NSString *name = nil;
     NSString *cid = nil;
     Ivar ch = class_getInstanceVariable([conv class], "_chat");
@@ -447,8 +354,6 @@ static NSString *getCurrentContactName(void) {
             if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
         }
     }
-    // Read chatIdentifier solely for background alias maintenance — never used
-    // as the storage key. Lets us detect renames and migrate data.
     if ([chat respondsToSelector:@selector(chatIdentifier)]) {
         NSString *c = [chat performSelector:@selector(chatIdentifier)];
         if ([c isKindOfClass:[NSString class]] && c.length) cid = c;
@@ -459,8 +364,6 @@ static NSString *getCurrentContactName(void) {
         gWAMCurrentContactDisplayName = [name copy];
         return name;
     }
-    // conv is non-nil but name not readable yet — keep the cache (likely set
-    // by cell-tap moments ago) so per-contact image stays applied.
     return gWAMCurrentContactName;
 }
 
@@ -483,9 +386,6 @@ static void reloadPrefs() {
     if (!fromDisk || fromDisk.count == 0) {
         fromDisk = [NSMutableDictionary dictionaryWithContentsOfFile:kPrefsPlistPathRootfull];
     }
-    // Plist file is the sole source of truth. We intentionally do NOT fall back to
-    // CFPreferences here — cfprefsd's in-memory cache survives prefs-file deletion and
-    // would otherwise resurrect stale values (e.g. lastSeenChangelogVersion) after a reset.
     cachedPrefs = (fromDisk && fromDisk.count > 0) ? fromDisk : [NSMutableDictionary new];
 }
 
@@ -521,8 +421,6 @@ static NSString *getDefaultChatImagePath() {
 
 #define kWAMPerContactDir @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs/per_contact"
 
-// Sanitize a contact name into something safe to use as a filename — strips path
-// separators and other shell-unfriendly characters.
 static NSString *sanitizeContactName(NSString *raw) {
     if (!raw.length) return nil;
     NSCharacterSet *invalid = [NSCharacterSet characterSetWithCharactersInString:@"/:?#[]@!$&'()*+,;= \t\n\r"];
@@ -538,11 +436,6 @@ static NSString *getPerContactImagePath(NSString *contactName, BOOL dark) {
     return [kWAMPerContactDir stringByAppendingPathComponent:fileName];
 }
 
-// Per-contact blur lives in the main prefs plist under perContactBlur as a dict
-// keyed by the sanitized contact name. Excluded from preset export the same way
-// per-contact images are (export uses a key allowlist).
-// Entries are {light: NSNumber, dark: NSNumber}. Legacy entries (a bare
-// NSNumber) are treated as the value for both modes until they're overwritten.
 static CGFloat getPerContactBlur(NSString *contactName, BOOL isDark) {
     NSString *safe = sanitizeContactName(contactName);
     if (!safe.length) return 0;
@@ -586,22 +479,9 @@ static void setPerContactBlur(NSString *contactName, BOOL isDark, CGFloat blur) 
     [prefs writeToFile:path atomically:YES];
     refreshPrefs();
 }
-
-// =====================================================================
-// Generic per-contact override layer
-//
-// Storage shape: prefs[@"perContactOverrides"] is a dict keyed by sanitized
-// contact name. Each entry is itself a dict keyed by the global prefs key
-// (e.g. "sentBubbleColor", "sentBubbleColorDark", "inputFieldBlurStyle")
-// holding the per-contact value in the same form the global pref uses
-// (hex string for colors, NSNumber for floats/bools, NSString for strings).
-//
-// Routing: every chat-view-related getter calls effectiveValueForKey(key)
-// instead of reading loadPrefs()[key] directly. The helper returns the
-// per-contact override for the active chat if isPerContactChatBgEnabled is
-// on and an override exists, otherwise the global value. So if no override
-// is set, chat behavior is identical to before.
-// =====================================================================
+/* ================================ */
+//      Per Contact Override
+/* ================================ */
 
 static NSDictionary *perContactOverridesForName(NSString *contactName) {
     NSString *safe = sanitizeContactName(contactName);
@@ -643,9 +523,6 @@ static void setPerContactOverride(NSString *contactName, NSString *key, id value
     refreshPrefs();
 }
 
-// The master per-contact switch is stored as @"_enabled" inside the same
-// perContactOverrides[name] dict. The leading underscore keeps it out of the
-// regular key namespace — effectiveValueForKey filters it out below.
 static NSString *const kWAMOverrideEnabledKey = @"_enabled";
 
 static BOOL perContactOverridesEnabled(NSString *contactName) {
@@ -663,16 +540,9 @@ static void clearPerContactOverride(NSString *contactName, NSString *key) {
     setPerContactOverride(contactName, key, nil);
 }
 
-// Returns the per-contact override for the currently-active chat if both the
-// master per-contact toggle is on AND an override exists for `key`. Otherwise
-// returns the global prefs value (or nil if neither exists).
 __attribute__((unused))
 static id effectiveValueForKey(NSString *key) {
     if (!key.length) return nil;
-    // getCurrentContactName returns nil outside a live chat (conv list,
-    // settings panes, app launch), so per-contact overrides naturally don't
-    // apply there. The per-chat master switch in the menu is the only gate
-    // beyond that.
     NSString *name = getCurrentContactName();
     if (name.length && perContactOverridesEnabled(name)) {
         id override = getPerContactOverride(name, key);
@@ -688,29 +558,9 @@ static BOOL chatHasPerContactOverride(void) {
     return perContactOverridesEnabled(name);
 }
 
-// =====================================================================
-// Chat-identifier alias system — rename resilience for per-chat data.
-//
-// The tap-to-image flow runs entirely on display NAME (works perfectly,
-// instant). But display names change: contacts get renamed in Contacts.app,
-// unnamed groups get titled, etc. Without an anchor we'd orphan the per-chat
-// data on rename.
-//
-// Solution: in the BACKGROUND (well after the tap path completes), the walker
-// reads BOTH chat.displayName AND chat.chatIdentifier whenever they're both
-// readable. We maintain a side table chatIdentifierAliases[chatIdentifier] =
-// lastSeenDisplayName. On every walker hit we compare:
-//   - If alias matches current displayName: no-op.
-//   - If alias holds a DIFFERENT (old) name: rename detected. Move the per-
-//     contact override dict, per-contact blur entry, and image files from
-//     old name → new name. Update the alias.
-//   - If no alias yet: record current displayName under chatIdentifier.
-//
-// The chatIdentifier reliability problem we hit before was about reading it
-// SYNCHRONOUSLY at tap time. As a delayed background anchor it's fine — by
-// the time the walker runs and finds a non-nil chatIdentifier, the value is
-// stable and correct. The tap path never depends on it.
-// =====================================================================
+/* =====================================================================
+                                Chat ID System
+   ===================================================================== */
 
 static NSString *getChatAliasName(NSString *chatIdentifier) {
     NSString *safe = sanitizeContactName(chatIdentifier);
@@ -736,11 +586,6 @@ static void setChatAliasName(NSString *chatIdentifier, NSString *displayName) {
     refreshPrefs();
 }
 
-// Move every piece of per-chat state keyed by sanitized(fromName) over to
-// keys of sanitized(toName). Idempotent — if destination already exists, the
-// incoming entries take precedence (we assume the rename means "this chat is
-// now this name", so the freshly-active key wins). Touches the prefs plist
-// once at the end to avoid mid-migration races on disk.
 static void migratePerChatData(NSString *fromName, NSString *toName) {
     NSString *fromSafe = sanitizeContactName(fromName);
     NSString *toSafe = sanitizeContactName(toName);
@@ -750,7 +595,6 @@ static void migratePerChatData(NSString *fromName, NSString *toName) {
     NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithContentsOfFile:path];
     if (!prefs) return;
     BOOL dirty = NO;
-    // perContactOverrides[from] → perContactOverrides[to]
     NSMutableDictionary *overrides = [(NSDictionary *)prefs[@"perContactOverrides"] mutableCopy];
     NSDictionary *fromOverrides = overrides[fromSafe];
     if ([fromOverrides isKindOfClass:[NSDictionary class]]) {
@@ -759,7 +603,6 @@ static void migratePerChatData(NSString *fromName, NSString *toName) {
         prefs[@"perContactOverrides"] = overrides;
         dirty = YES;
     }
-    // perContactBlur[from] → perContactBlur[to]
     NSMutableDictionary *blurMap = [(NSDictionary *)prefs[@"perContactBlur"] mutableCopy];
     id fromBlur = blurMap[fromSafe];
     if (fromBlur) {
@@ -772,7 +615,6 @@ static void migratePerChatData(NSString *fromName, NSString *toName) {
         [prefs writeToFile:path atomically:YES];
         refreshPrefs();
     }
-    // Rename per-contact image files on disk (light + dark).
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *fromLight = getPerContactImagePath(fromName, NO);
     NSString *toLight = getPerContactImagePath(toName, NO);
@@ -788,47 +630,28 @@ static void migratePerChatData(NSString *fromName, NSString *toName) {
     }
 }
 
-// Single chokepoint — called by the walker when it has both a chatIdentifier
-// and a current displayName in hand. Detects renames and migrates data.
 static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *displayName) {
     if (!chatIdentifier.length || !displayName.length) return;
     NSString *prevName = getChatAliasName(chatIdentifier);
     if (prevName.length && ![prevName isEqualToString:displayName]) {
         migratePerChatData(prevName, displayName);
         setChatAliasName(chatIdentifier, displayName);
-        // Migration just landed data under the new name. Post the refresh so
-        // updateChatBackground re-runs RIGHT NOW with the migrated data — the
-        // user sees the per-contact image instead of waiting for the next
-        // retry tick (which would leave a brief flash of the global).
         [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
     } else if (!prevName.length) {
         setChatAliasName(chatIdentifier, displayName);
     }
 }
 
-// During a trigger call, return the explicit name the trigger captured (so the
-// fresh, visible-UI name beats the lagging ivar). Otherwise fall through to
-// the regular walk-based getter.
 static NSString *getActiveContactNameForBg(void) {
     if (gWAMTriggerNameOverride.length) return gWAMTriggerNameOverride;
     return getCurrentContactName();
 }
 
-// Returns the per-contact image path for the active chat if one exists on disk,
-// otherwise nil. This is the single check used by every per-contact branch — if
-// it returns a path, the chat has its own background; if nil, fall back to global.
 static NSString *getPerContactImagePathForCurrentChat() {
     if (!isPerContactChatBgEnabled()) return nil;
     NSString *name = getActiveContactNameForBg();
     if (!name.length) return nil;
     if (!perContactOverridesEnabled(name)) return nil;
-    // Try the mode-matching file first; if it doesn't exist, fall back to
-    // the other mode's file. iOS Messages occasionally calls updateBg with a
-    // trait collection whose userInterfaceStyle is unspecified or briefly
-    // light during transitions — without this fallback we'd reject our own
-    // saved image and let the global background overwrite it. Better to
-    // show the user's dark image under a transient light trait than to
-    // revert to the global.
     BOOL dark = isDarkMode();
     NSString *primary = getPerContactImagePath(name, dark);
     if (primary && [[NSFileManager defaultManager] fileExistsAtPath:primary]) return primary;
@@ -842,9 +665,6 @@ static NSString *getChatImagePath() {
     return perPath ?: getDefaultChatImagePath();
 }
 
-// One blur getter that picks per-contact blur when this chat has its own image,
-// else the global slider value. Mirrors getChatImagePath: callers don't have to
-// know whether they're rendering a per-contact or global image.
 static CGFloat getEffectiveChatBgBlur() {
     if (getPerContactImagePathForCurrentChat()) {
         return getPerContactBlur(getActiveContactNameForBg(), isDarkMode());
@@ -852,8 +672,6 @@ static CGFloat getEffectiveChatBgBlur() {
     return getChatImageBlurAmount();
 }
 
-// True if any chat-bg image should be shown — either the global toggle is on,
-// or this chat has its own per-contact image regardless of the global toggle.
 static BOOL shouldShowAnyChatBgImage() {
     return isChatImageBgEnabled() || getPerContactImagePathForCurrentChat() != nil;
 }
@@ -870,9 +688,6 @@ BOOL isTweakEnabled() {
 }
 
 BOOL isModernNavBarEnabled() {
-    // Modern/stock is a global-only setting — there's no per-contact UI for it
-    // and per-chat switching the bar style caused half-applied transitional
-    // state on chat exits. Read straight from prefs.
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"isModernNavBarEnabledDark" : @"isModernNavBarEnabled";
     return prefs[key] ? [prefs[key] boolValue] : YES;
@@ -917,20 +732,11 @@ BOOL isChatImageBgEnabled() {
     return v ? [v boolValue] : NO;
 }
 
-// The per-contact system used to be gated by a global prefs toggle, but with
-// the per-chat master switch now controlling whether overrides apply for any
-// given chat, the global gate was redundant — and would silently kill the
-// menu's per-chat values if the user forgot the global was off. Always-on
-// now; the function is kept so the existing call sites don't all need to
-// change.
 BOOL isPerContactChatBgEnabled() {
     return YES;
 }
 
 BOOL isCustomTextColorsEnabled() {
-    // When this chat has per-contact overrides toggled on, force the feature
-    // enabled so any per-chat text-color values take effect regardless of
-    // whether the user has the global toggle off.
     if (chatHasPerContactOverride()) return YES;
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"isCustomTextColorsEnabledDark" : @"isCustomTextColorsEnabled";
@@ -945,7 +751,6 @@ BOOL isCustomBubbleColorsEnabled() {
 }
 
 BOOL isModernMessageBarEnabled() {
-    // Global-only — see the comment on isModernNavBarEnabled.
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"isModernMessageBarEnabledDark" : @"isModernMessageBarEnabled";
     return prefs[key] ? [prefs[key] boolValue] : YES;
@@ -1105,11 +910,6 @@ UIColor *colorFromHex(NSString *hexString) {
     return [UIColor colorWithRed:r green:g blue:b alpha:a];
 }
 
-// Convert any UIColor to "#RRGGBB". Saved swatches in UIColorPickerViewController
-// can come back in displayP3 or extended-range sRGB — getRed:green:blue:alpha:
-// returns NO for those and leaves the out-params untouched, which was silently
-// turning every swatch pick into "#000000". Re-match to sRGB first, then fall
-// back to getWhite: for grayscale, then clamp the components.
 static NSString *hexFromColor(UIColor *color) {
     if (!color) return nil;
 
@@ -1135,8 +935,6 @@ static NSString *hexFromColor(UIColor *color) {
 
     int ri = (int)round(r * 255), gi = (int)round(g * 255), bi = (int)round(b * 255);
     int ai = (int)round(a * 255);
-    // Emit 8-char only when there's actual transparency. colorFromHex already
-    // parses both lengths, so 6-char for fully opaque keeps stored prefs tidy.
     if (ai >= 255) {
         return [NSString stringWithFormat:@"#%02X%02X%02X", ri, gi, bi];
     }
@@ -1170,12 +968,13 @@ UIColor *getTitleTextColor() {
     return colorFromHex(effectiveValueForKey(key)) ?: [UIColor whiteColor];
 }
 
-// Conv list variant: reads the GLOBAL value, never per-contact. The conv list
-// shows many chats side-by-side; rendering all cells with one chat's per-
-// contact color is wrong by design. Used by every conv-list-only call site
-// (cell layout, controller-wide updateAllColors, UILabel.setTextColor when
-// the label is inside a conv list cell). Chat-view callers still use the
-// effectiveValueForKey-aware getTitleTextColor().
+UIColor *getChatContactNameColor() {
+    NSString *key = isDarkMode() ? @"chatContactNameColorDark" : @"chatContactNameColor";
+    UIColor *c = colorFromHex(effectiveValueForKey(key));
+    if (c) return c;
+    return getTitleTextColor();
+}
+
 UIColor *getTitleTextColorConvList() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"titleTextColorDark" : @"titleTextColor";
@@ -1211,12 +1010,6 @@ static BOOL isAdvancedTintEnabled() {
     return prefs[@"isAdvancedTintEnabled"] ? [prefs[@"isAdvancedTintEnabled"] boolValue] : NO;
 }
 
-// All advanced-tint reads go through effectiveValueForKey so the per-contact
-// override system applies. Outside a chat (gWAMCurrentContactName is nil), the
-// helper falls back to global prefs, so the conv list stays on globals.
-// chatHasPerContactOverride also implicitly enables the advanced-tint feature
-// inside a chat that has per-contact toggled on, mirroring how Custom Bubble
-// Colors and Modern Message Bar work.
 static UIColor *getAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
     BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
     if (!effective) return fallback;
@@ -1239,12 +1032,6 @@ static UIColor *getAdvancedTintColorForView(NSString *lightKey, NSString *darkKe
     return color ?: fallback;
 }
 
-// Chat-scoped variants of the advanced tint getters. Identical to the regular
-// ones except they route through effectiveValueForKey (so per-contact overrides
-// apply) and treat master per-contact override as an implicit enable for the
-// advanced tint feature. Only use these from call sites that render INSIDE the
-// chat view — using them from the conversation list would pick up a stale
-// per-contact name and apply the wrong override.
 static UIColor *getChatAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
     BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
     if (!effective) return fallback;
@@ -1272,12 +1059,6 @@ static UIColor *getAdvancedUnreadDotColor() {
 }
 
 static UIColor *getAdvancedSwitchTintColor() {
-    // Priority order:
-    //   1. per-contact advancedSwitchTintColor (unlikely — no UI for it)
-    //   2. per-contact systemTintColor (the menu DOES expose this — it should
-    //      reach switches even when a global advancedSwitchTintColor is set)
-    //   3. global advancedSwitchTintColor
-    //   4. global systemTintColor
     if (chatHasPerContactOverride()) {
         NSString *swKey = isDarkMode() ? @"advancedSwitchTintColorDark" : @"advancedSwitchTintColor";
         id rawSw = getPerContactOverride(gWAMCurrentContactName, swKey);
@@ -1557,21 +1338,37 @@ static UIColor *getPinnedBubbleColor() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"pinnedBubbleColorDark" : @"pinnedBubbleColor";
     NSString *hexColor = prefs[key];
-    if (!hexColor || [hexColor length] == 0) return getReceivedBubbleColor();
-    return colorFromHex(hexColor);
+    if (hexColor.length) return colorFromHex(hexColor);
+    NSString *recvKey = isDarkMode() ? @"receivedBubbleColorDark" : @"receivedBubbleColor";
+    UIColor *c = colorFromHex(prefs[recvKey]);
+    if (c) return c;
+    return [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
 }
 
 static UIColor *getPinnedBubbleTextColor() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"pinnedBubbleTextColorDark" : @"pinnedBubbleTextColor";
     NSString *hexColor = prefs[key];
-    if (!hexColor || [hexColor length] == 0) return getReceivedTextColor();
-    return colorFromHex(hexColor);
+    if (hexColor.length) return colorFromHex(hexColor);
+    NSString *recvKey = isDarkMode() ? @"receivedTextColorDark" : @"receivedTextColor";
+    return colorFromHex(prefs[recvKey]);
 }
 
 static UIColor *getNavBarTintColor() {
     NSString *key = isDarkMode() ? @"navBarTintColorDark" : @"navBarTintColor";
     return colorFromHex(effectiveValueForKey(key)) ?: getSystemTintColor();
+}
+
+static UIColor *getNavBarTintColorForView(UIView *view) {
+    if (wamNavBarShouldUseGlobals(view)) {
+        NSDictionary *prefs = loadPrefs();
+        NSString *key = isDarkMode() ? @"navBarTintColorDark" : @"navBarTintColor";
+        UIColor *c = colorFromHex(prefs[key]);
+        if (c) return c;
+        NSString *sysKey = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
+        return colorFromHex(prefs[sysKey]);
+    }
+    return getNavBarTintColor();
 }
 
 static UIColor *getMessageBarTintColor() {
@@ -1618,17 +1415,12 @@ static void markChangelogSeen(void) {
     refreshPrefs();
 }
 
-// A view whose backing layer IS a CAGradientLayer. The layer auto-resizes with
-// the view via UIKit's normal layout, so we never have to chase frames in
-// viewDidLayoutSubviews to keep the gradient pinned.
 @interface WAMGradientView : UIView
 @end
 @implementation WAMGradientView
 + (Class)layerClass { return [CAGradientLayer class]; }
 @end
 
-// 8x8 light/dark checkerboard used behind color swatches so partial-alpha
-// colors are visibly transparent. Generated once and cached.
 static UIImage *wamCheckerboardImage(void) {
     static UIImage *img = nil;
     static dispatch_once_t once;
@@ -1646,20 +1438,16 @@ static UIImage *wamCheckerboardImage(void) {
     return img;
 }
 
-// Switches inside the per-contact menu set their own onTintColor; the global
-// %hook UISwitch below skips any switch tagged with this flag.
 static const void *kWAMSwitchOwnsTintKey = &kWAMSwitchOwnsTintKey;
+
 static BOOL wamSwitchOwnsItsTint(UISwitch *sw) {
     return [(NSNumber *)objc_getAssociatedObject(sw, kWAMSwitchOwnsTintKey) boolValue];
 }
+
 static void wamMarkSwitchOwnsTint(UISwitch *sw) {
     objc_setAssociatedObject(sw, kWAMSwitchOwnsTintKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-// ITU-R BT.601 luma. White reads cleanly on most mid-bright colors, so the
-// flip-to-black threshold is set high (~0.82) — only near-white backgrounds
-// switch to black foreground. This keeps mid-tones like tan reading as white,
-// which is what the eye expects on a saturated UI element.
 static UIColor *contrastingColorForBackground(UIColor *bg) {
     if (!bg) return [UIColor whiteColor];
     CGFloat r = 0, g = 0, b = 0, a = 0;
@@ -1679,11 +1467,7 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 }
 
 @interface WAMPerContactSettings : UIViewController <UIImagePickerControllerDelegate, UINavigationControllerDelegate, UIColorPickerViewControllerDelegate>
-// contactName is the STORAGE KEY — chat's stable identifier (handle for 1:1
-// chats, GUID for groups). Used for every per-contact read/write.
 @property (nonatomic, copy) NSString *contactName;
-// displayName is the human-readable name shown in the menu's title bar.
-// Optional — falls back to contactName if not set. Doesn't affect storage.
 @property (nonatomic, copy) NSString *displayName;
 @property (nonatomic, copy) void (^onChanged)(void);
 @end
@@ -1699,7 +1483,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     UIScrollView *_scroll;
     UIView *_tabContent;
 
-    // Master override (per-contact) UI
     UIView *_masterCard;
     UISwitch *_masterSwitch;
     UILabel *_masterTitleLabel;
@@ -1707,7 +1490,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     UIImageView *_masterIcon;
     CAGradientLayer *_masterGradient;
 
-    // Background tab refs
     UIView *_bgPreviewContainer;
     UIImageView *_bgPreview;
     UILabel *_bgPlaceholder;
@@ -1772,10 +1554,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 
     _titleLabel = [UILabel new];
     NSString *titleSource = self.displayName.length ? self.displayName : self.contactName;
-    // If the title source is the raw chat identifier (handle/GUID) — which
-    // happens when iOS hasn't resolved a contact name and there's no group
-    // name set — fall back to a generic "This Chat" rather than displaying
-    // "+15551234567's Chat" or "chat0123abcd's Chat".
     BOOL looksLikeRawID = [titleSource hasPrefix:@"iMessage;"]
                       || [titleSource hasPrefix:@"SMS;"]
                       || [titleSource hasPrefix:@"chat"]
@@ -1802,9 +1580,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     UIButton *done = [UIButton buttonWithType:UIButtonTypeSystem];
     [done setTitle:@"Done" forState:UIControlStateNormal];
     done.titleLabel.font = [WAMPerContactSettings wamRoundedFontOfSize:17 weight:UIFontWeightSemibold];
-    // setTitleColor + explicit tintColor both — system buttons sometimes route
-    // through tintColor when re-rendered, and the global tint hook would
-    // otherwise paint over us on re-layout.
     [done setTitleColor:[WAMPerContactSettings wamDoneAccent] forState:UIControlStateNormal];
     done.tintColor = [WAMPerContactSettings wamDoneAccent];
     [done addTarget:self action:@selector(doneTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -1843,7 +1618,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     _tabSeg.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_tabSeg];
 
-    // -- Master override card --
     _masterCard = [UIView new];
     _masterCard.layer.cornerRadius = 18;
     if (@available(iOS 13.0, *)) _masterCard.layer.cornerCurve = kCACornerCurveContinuous;
@@ -1880,7 +1654,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 
     _masterSwitch = [UISwitch new];
     wamMarkSwitchOwnsTint(_masterSwitch);
-    // Pastel mint track sits brighter than the sage gradient behind it.
     _masterSwitch.onTintColor = [WAMPerContactSettings wamMasterSwitchTrack];
     _masterSwitch.thumbTintColor = [UIColor whiteColor];
     _masterSwitch.on = perContactOverridesEnabled(self.contactName);
@@ -1968,38 +1741,34 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     [super traitCollectionDidChange:previousTraitCollection];
     if (@available(iOS 13.0, *)) {
         if (self.traitCollection.userInterfaceStyle != previousTraitCollection.userInterfaceStyle) {
-            // System tint pref splits light/dark — re-resolve so the gradient
-            // tracks the user's choice for the current trait.
             [self wamRefreshMasterAppearance];
             [self loadTab];
         }
     }
 }
 
-// Hardcoded so the menu's chrome never inherits the user's system tint —
-// gives the per-contact UI its own visual identity.
 + (UIColor *)wamMasterAccent {
-    return [UIColor colorWithRed:0.25 green:0.66 blue:0.56 alpha:1.0]; // #40A88E toned sage-mint
+    return [UIColor colorWithRed:0.25 green:0.66 blue:0.56 alpha:1.0]; 
 }
 
 + (UIColor *)wamMasterSwitchTrack {
-    return [UIColor colorWithRed:0.66 green:0.88 blue:0.80 alpha:1.0]; // #A8E0CD pastel mint — lighter than the sage gradient behind it
+    return [UIColor colorWithRed:0.66 green:0.88 blue:0.80 alpha:1.0];
 }
 
 + (UIColor *)wamChooseAccent {
-    return [UIColor colorWithRed:0.24 green:0.39 blue:1.00 alpha:1.0]; // #3E64FF — periwinkle, midway between violet and system blue
+    return [UIColor colorWithRed:0.24 green:0.39 blue:1.00 alpha:1.0]; 
 }
 
 + (UIColor *)wamRemoveAccent {
-    return [UIColor colorWithRed:0.95 green:0.32 blue:0.36 alpha:1.0]; // #F2525C warm red — distinct from trash icon
+    return [UIColor colorWithRed:0.95 green:0.32 blue:0.36 alpha:1.0];
 }
 
 + (UIColor *)wamDoneAccent {
-    return [UIColor colorWithRed:0.25 green:0.66 blue:0.56 alpha:1.0]; // matches master sage-mint
+    return [UIColor colorWithRed:0.25 green:0.66 blue:0.56 alpha:1.0];
 }
 
 + (UIColor *)wamBlurSliderAccent {
-    return [UIColor systemPurpleColor]; // matches the BLUR section header tint
+    return [UIColor systemPurpleColor];
 }
 
 - (void)wamRefreshMasterAppearance {
@@ -2059,13 +1828,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 }
 
 - (void)wamPrefsChangedExternally:(NSNotification *)note {
-    // Do NOT reload the tab here. The menu's view hierarchy must stay stable
-    // during the user's interactions — color picker, text field, choice sheet
-    // all keep references to specific swatches/rows/labels. Tearing those down
-    // mid-interaction (which would happen on every chat-view lifecycle
-    // notification that fires while the menu is open) makes taps land on
-    // nothing. Master-card appearance only depends on the master flag, which
-    // is safe to refresh in-place.
     [self wamRefreshMasterAppearance];
 }
 
@@ -2206,11 +1968,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     return card;
 }
 
-// A pill containing a small colored SF Symbol icon followed by the section
-// title in caps. The icon gives the section a unique fingerprint and an
-// accent color, which is what makes the layout pop more. Bake the icon color
-// into the image with AlwaysOriginal so it can't be retinted by the system
-// tint or by any walker that recolors UIImageViews to match the user accent.
 - (UIView *)wamMakeSectionHeader:(NSString *)title symbol:(NSString *)symbol tint:(UIColor *)tint {
     UIView *wrap = [UIView new];
     wrap.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2254,7 +2011,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 - (UIView *)buildBackgroundTab {
     UIView *root = [UIView new];
 
-    // --- Preview card ---
     UIView *previewHeader = [self wamMakeSectionHeader:@"Preview" symbol:@"photo" tint:[UIColor systemBlueColor]];
     [root addSubview:previewHeader];
 
@@ -2282,7 +2038,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     _bgPlaceholder.translatesAutoresizingMaskIntoConstraints = NO;
     [_bgPreviewContainer addSubview:_bgPlaceholder];
 
-    // --- Blur card ---
     UIView *blurHeader = [self wamMakeSectionHeader:@"Blur" symbol:@"camera.filters" tint:[UIColor systemPurpleColor]];
     [root addSubview:blurHeader];
 
@@ -2313,7 +2068,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     _bgBlurSlider.translatesAutoresizingMaskIntoConstraints = NO;
     [blurCard addSubview:_bgBlurSlider];
 
-    // --- Buttons ---
     _bgChooseButton = [UIButton buttonWithType:UIButtonTypeCustom];
     _bgChooseButton.titleLabel.font = [WAMPerContactSettings wamRoundedFontOfSize:17 weight:UIFontWeightSemibold];
     [_bgChooseButton addTarget:self action:@selector(chooseTapped) forControlEvents:UIControlEventTouchUpInside];
@@ -2411,8 +2165,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     _bgRemoveButton.alpha = master ? 1.0 : 0.45;
 }
 
-// Blur against a 600px downsample — Gaussian on the full-res original was the
-// source of slider lag.
 - (UIImage *)downsampleForPreview:(UIImage *)src {
     CGFloat maxDim = 600;
     CGFloat scale = MIN(maxDim / src.size.width, maxDim / src.size.height);
@@ -2463,10 +2215,6 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-// Fired regardless of how the sheet was dismissed (Done button, swipe-down,
-// programmatic dismiss). Post the refresh here so chat-internal views repaint
-// with the final per-contact values — by viewDidDisappear time the sheet is
-// no longer covering the chat and getCurrentContactName resolves cleanly.
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
@@ -2494,15 +2242,9 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
     [picker dismissViewControllerAnimated:YES completion:nil];
 }
 
-// ===================================================================
-// Bubbles tab (and shared row/card infrastructure used by future tabs)
-// ===================================================================
-
-// Row spec: @{@"label", @"light", @"dark", @"type": (@"color"|@"bool")}.
-// A "card" is a labelled box wrapping an "Override globals" toggle plus one or
-// more value rows. Override toggles the override state for ALL keys in the
-// card at once — flipping on copies current global values into the override
-// store, flipping off clears them.
+/* ===================================================================
+   Bubbles tab (and shared row/card infrastructure used by future tabs)
+   =================================================================== */
 
 static const void *kWAMRowKeyAssocKey = &kWAMRowKeyAssocKey;
 static const void *kWAMRowTypeAssocKey = &kWAMRowTypeAssocKey;
@@ -2513,12 +2255,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     return k.length ? k : spec[@"light"];
 }
 
-// Read helper used INSIDE the menu. The global effectiveValueForKey checks
-// whether a chat is currently the active surface; in the middle of a sheet
-// presentation that check can briefly return false. The menu knows exactly
-// which contact it's editing via self.contactName, so it reads per-contact
-// directly with no scope guesswork — then falls back to global only when no
-// override exists for this key.
 - (id)wamReadValueForKey:(NSString *)key {
     if (!key.length) return nil;
     NSString *name = self.contactName;
@@ -2607,9 +2343,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         swatch.enabled = enabled;
         swatch.alpha = enabled ? 1.0 : 0.35;
 
-        // Checkerboard backdrop + tinted top layer. The button's own
-        // backgroundColor would paint over the backdrop, so two passive
-        // subviews stacked with autoresizing handle the layering.
         UIView *checker = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 28, 28)];
         checker.backgroundColor = [UIColor colorWithPatternImage:wamCheckerboardImage()];
         checker.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -2793,18 +2526,12 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     UIColorPickerViewController *picker = [UIColorPickerViewController new];
     picker.delegate = self;
     picker.supportsAlpha = YES;
-    // Current color (with alpha) lives in the effective override value now —
-    // the swatch button no longer carries its own backgroundColor since the
-    // checkerboard backdrop and the colored top sit as subviews.
     picker.selectedColor = colorFromHex([self wamReadValueForKey:key]) ?: [UIColor whiteColor];
     objc_setAssociatedObject(picker, kWAMRowKeyAssocKey, key, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [self presentViewController:picker animated:YES completion:nil];
 }
 
 - (void)colorPickerViewController:(UIColorPickerViewController *)picker didSelectColor:(UIColor *)color continuously:(BOOL)continuously {
-    // Save on every callback regardless of `continuously`. Swatch taps on
-    // saved presets sometimes arrive flagged continuously=YES (Apple quirk),
-    // and skipping those was the reason swatch picks weren't sticking.
     NSString *key = objc_getAssociatedObject(picker, kWAMRowKeyAssocKey);
     if (!key.length) return;
     setPerContactOverride(self.contactName, key, hexFromColor(color));
@@ -2850,6 +2577,12 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
            @"tint": [UIColor systemGrayColor],
            @"specs": @[
                @{@"label": @"Text Color", @"light": @"timestampTextColor", @"dark": @"timestampTextColorDark", @"type": @"color"},
+           ]},
+        @{ @"title": @"Status Receipts",
+           @"symbol": @"checkmark.message.fill",
+           @"tint": [UIColor colorWithRed:0.42 green:0.36 blue:0.82 alpha:1.0], // #6B5DD2 indigo
+           @"specs": @[
+               @{@"label": @"Text Color", @"light": @"advancedStatusCellColor", @"dark": @"advancedStatusCellColorDark", @"type": @"color"},
            ]},
     ];
 
@@ -2948,7 +2681,8 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
            @"symbol": @"rectangle.topthird.inset.filled",
            @"tint": [UIColor colorWithRed:0.95 green:0.45 blue:0.18 alpha:1.0], // #F2742E burnt orange
            @"specs": @[
-               @{@"label": @"Tint Color", @"light": @"navBarTintColor", @"dark": @"navBarTintColorDark", @"type": @"color"},
+               @{@"label": @"Tint Color",    @"light": @"navBarTintColor",     @"dark": @"navBarTintColorDark",     @"type": @"color"},
+               @{@"label": @"Contact Name",  @"light": @"chatContactNameColor", @"dark": @"chatContactNameColorDark", @"type": @"color"},
            ]},
         @{ @"title": @"Cell Tint",
            @"symbol": @"rectangle.stack.fill",
@@ -3205,11 +2939,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 - (UIColor *)tintColor {
     if (!isTweakEnabled()) return %orig;
 
-    // EARLY BAIL: search bars in the conv list (the "Search" field with the
-    // magnifying-glass + mic icons) must stay default-tinted — they're
-    // standard iOS UI, not part of any per-contact decoration. This check
-    // runs before the conv list / navbar bypasses so the bypasses can't
-    // accidentally global-tint them.
     {
         UIView *sp = self;
         int shops = 0;
@@ -3224,10 +2953,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         }
     }
 
-    // If this view is rendered inside the conv list (cell, pinned bubble,
-    // anywhere under a CKConversationListCollectionViewController), force
-    // the GLOBAL tint regardless of what the per-contact system thinks.
-    // The conv list shows multiple chats, so per-contact has no meaning here.
     {
         UIView *p = self;
         Class convListCellCls = %c(CKConversationListCollectionViewConversationCell);
@@ -3244,20 +2969,8 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
                 if (globalTint) return globalTint;
                 return %orig;
             }
-            // STRUCTURAL navbar bypass — when we find a UINavigationBar in
-            // the ancestor chain, ask its owning nav controller what its
-            // topViewController currently is. If that's the conv list
-            // controller, this navbar element belongs to the conv list and
-            // should use globals. This is instant — topViewController flips
-            // synchronously on push/pop, no heartbeat lag, no oscillation.
             if ([p isKindOfClass:[UINavigationBar class]]) {
-                UINavigationBar *bar = (UINavigationBar *)p;
-                id delegate = bar.delegate;
-                UIViewController *topVC = nil;
-                if ([delegate isKindOfClass:[UINavigationController class]]) {
-                    topVC = [(UINavigationController *)delegate topViewController];
-                }
-                if (topVC && [topVC isKindOfClass:%c(CKConversationListCollectionViewController)]) {
+                if (wamNavBarShouldUseGlobals(p)) {
                     NSDictionary *prefs = loadPrefs();
                     NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
                     UIColor *globalTint = colorFromHex(prefs[key]);
@@ -3265,7 +2978,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
                     return %orig;
                 }
             }
-            // Also check responder chain for the conv list controller.
             if ([p respondsToSelector:@selector(_viewControllerForAncestor)]) {
                 UIViewController *vc = [p _viewControllerForAncestor];
                 if (vc && [vc isKindOfClass:%c(CKConversationListCollectionViewController)]) {
@@ -3416,25 +3128,8 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %hook CKConversationListCollectionViewController
 
-// Detect conv list view entering/leaving its window. Cheap dedupe via
-// associated object. Two transitions handled:
-//   not-in-window → in-window: user is going back to the conv list (or mid-
-//     swipe). Clear the stale per-contact cache and force the conv list to
-//     repaint with globals so there's no per-contact flash. Walker reads
-//     _currentConversation as ground truth — if iOS hasn't actually cleared
-//     it (half-swipe in progress), walker will return the chat name again
-//     on its next call and per-contact paints back.
-//   in-window → not-in-window: user committed back INTO the chat (e.g. after
-//     a cancelled swipe). Force the messages controller to re-read state
-//     and reapply per-contact colors so the chat doesn't stay on globals.
-
 -(void)viewWillAppear:(BOOL)animated {
     %orig;
-    // The conv list reads globals automatically now — getCurrentContactName
-    // walks the live VC hierarchy and returns nil when the chat isn't an
-    // active surface. We still post a refresh so any conv-list cells that
-    // were drawn during a brief stale state (a swipe-back-gesture frame)
-    // repaint with globals as soon as we land here.
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
     if (!isTweakEnabled() || !isiOS15()) return;
     [self applyCustomNavTitle];
@@ -3443,14 +3138,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 -(void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isTweakEnabled()) {
-        // The chat's viewWillDisappear posts kPrefsChangedNotification mid-pop,
-        // but at that moment the conv list's collection view has no visible
-        // cells yet (they're still being brought back by the pop animation),
-        // so updateAllColors iterates an empty visibleCells array and nothing
-        // gets repainted. By viewDidAppear, the cells are mounted and visible —
-        // force the redraw here so the title color, tint, bubble colors, etc.
-        // snap back to globals THE INSTANT the user lands on the list,
-        // instead of waiting for the user to scroll a stale cell off-screen.
         [self handlePrefsChanged];
     }
     if (!isTweakEnabled() || gWAMChangelogShownThisLaunch) return;
@@ -3476,7 +3163,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
             self.navigationController.navigationBar.titleTextAttributes = attrs;
             self.navigationController.navigationBar.largeTitleTextAttributes = attrs;
         } else {
-            // No custom color for this mode — clear our attributes so the system defaults take over.
             self.navigationController.navigationBar.titleTextAttributes = nil;
             self.navigationController.navigationBar.largeTitleTextAttributes = nil;
         }
@@ -3509,8 +3195,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     [self updateBackground];
     [self updateAllColors];
-    [self.collectionView reloadData];
-    [self.collectionView layoutIfNeeded];
 
     if (isiOS15()) {
         [self applyCustomNavTitle];
@@ -3681,25 +3365,10 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     return self;
 }
 
-// Tap-down on the cell fires setHighlighted:YES — earliest signal we have for
-// which chat is about to open. Cells contain multiple CKLabels (contact name,
-// last-message preview, etc.); the contact name uses the largest font, so we
-// scan all CKLabels and pick the one with the largest pointSize rather than
-// taking the first one we hit (which is what was getting the wrong text).
-// Updates the cache and pre-applies the bg on the messages controller (if it
-// already exists — persistent-VC case) so the per-contact image is in place
-// before the slide-in starts. New-VC case is covered by viewDidLoad reading
-// the cache we just set.
 -(void)setHighlighted:(BOOL)highlighted {
     %orig;
     if (!highlighted || !isTweakEnabled() || !isPerContactChatBgEnabled()) return;
 
-    // OLD pre-migration path, restored. Read the largest CKLabel (the contact
-    // name) and use that string as both the display name AND the storage key.
-    // Per-chat overrides are stored under sanitized display name; unnamed
-    // group chats (no display name) get no per-chat customization. This is
-    // the tradeoff for getting reliable sync pre-apply on iOS 26 where the
-    // identifier-based ivars lag too much to be usable.
     UILabel *best = nil;
     CGFloat bestSize = 0;
     NSMutableArray *queue = [NSMutableArray arrayWithObject:self.contentView];
@@ -3740,11 +3409,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
-    // Background rename-detection — pull chatIdentifier off the cell's
-    // conversation via the list controller (independent of the laggy
-    // CKMessagesController._currentConversation ivar) and reconcile the
-    // alias. Deferred to the next runloop tick so the tap-completion path
-    // iOS runs after setHighlighted: returns isn't blocked by our work.
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -3848,6 +3512,44 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     %orig;
     if (!isTweakEnabled()) return;
 
+    NSString *chatName = gWAMCurrentContactName;
+    if ([self isKindOfClass:%c(CKLabel)] && text.length && chatName.length &&
+        [text isEqualToString:chatName]) {
+        Class avatarTitleCls = %c(CKAvatarTitleCollectionReusableView);
+        Class avatarNavBarCls = %c(CKAvatarNavigationBar);
+        UIView *up = self.superview;
+        int hops = 0;
+        BOOL inAvatarPath = NO;
+        while (up && hops < 12) {
+            if ((avatarTitleCls && [up isKindOfClass:avatarTitleCls]) ||
+                (avatarNavBarCls && [up isKindOfClass:avatarNavBarCls])) {
+                inAvatarPath = YES;
+                break;
+            }
+            up = up.superview;
+            hops++;
+        }
+        if (inAvatarPath) {
+            UIColor *nameColor = getChatContactNameColor();
+            if (nameColor) {
+                if (!objc_getAssociatedObject(self, &kWAMOrigTitleColorKey)) {
+                    objc_setAssociatedObject(self, &kWAMOrigTitleColorKey,
+                        self.textColor ?: (id)[NSNull null],
+                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                self.textColor = nameColor;
+                NSDictionary *attrs = @{
+                    NSForegroundColorAttributeName: nameColor,
+                    NSFontAttributeName: self.font ?: [UIFont systemFontOfSize:UIFont.labelFontSize]
+                };
+                NSAttributedString *colored = [[NSAttributedString alloc]
+                    initWithString:text attributes:attrs];
+                self.attributedText = colored;
+                [self setNeedsDisplay];
+            }
+        }
+    }
+
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 7) {
@@ -3866,6 +3568,40 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         }
         parent = parent.superview;
         levels++;
+    }
+}
+
+- (void)didMoveToSuperview {
+    %orig;
+    if (!isTweakEnabled()) return;
+    NSString *chatName = gWAMCurrentContactName;
+    NSString *text = self.text;
+    if (chatName.length && text.length && [text isEqualToString:chatName]) {
+        Class avatarTitleCls = %c(CKAvatarTitleCollectionReusableView);
+        Class avatarNavBarCls = %c(CKAvatarNavigationBar);
+        UIView *up = self.superview;
+        int hops = 0;
+        BOOL inAvatarPath = NO;
+        while (up && hops < 12) {
+            if ((avatarTitleCls && [up isKindOfClass:avatarTitleCls]) ||
+                (avatarNavBarCls && [up isKindOfClass:avatarNavBarCls])) {
+                inAvatarPath = YES;
+                break;
+            }
+            up = up.superview;
+            hops++;
+        }
+        if (inAvatarPath) {
+            UIColor *nameColor = getChatContactNameColor();
+            if (nameColor) {
+                if (!objc_getAssociatedObject(self, &kWAMOrigTitleColorKey)) {
+                    objc_setAssociatedObject(self, &kWAMOrigTitleColorKey,
+                        self.textColor ?: (id)[NSNull null],
+                        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                self.textColor = nameColor;
+            }
+        }
     }
 }
 
@@ -4075,7 +3811,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     if (!isNavBarCustomizationEnabled()) return;
 
-    UIColor *tintColor = getNavBarTintColor();
+    UIColor *tintColor = getNavBarTintColorForView(self);
     if (!tintColor) return;
 
     BOOL hasContactView = self.window ? [self findContactViewInWindow:self.window] : NO;
@@ -4165,10 +3901,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     for (UIView *view in viewsToRemove) [view removeFromSuperview];
 }
 
-// Inverse of ensureBlurExists — strips our modern-style blur (the
-// UIVisualEffectView with a CAGradientLayer mask we added) so toggling to the
-// stock bar live actually shows the stock bar instead of leaving the modern
-// gradient ghosted underneath until app relaunch.
 %new
 - (void)removeOurModernBlur {
     for (UIView *sub in [self.subviews copy]) {
@@ -4249,7 +3981,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         return;
     }
 
-    UIColor *tintColor = getNavBarTintColor();
+    UIColor *tintColor = getNavBarTintColorForView(self);
     if (!tintColor) {
         if (existingOverlay) [existingOverlay removeFromSuperview];
         return;
@@ -4280,10 +4012,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %end
 
-// Catch back-taps before iOS starts the pop animation so we can flip the
-// in-chat flag and refresh the conv list synchronously — that gives us a
-// frame to repaint with global prefs before the conv list slides into view,
-// killing the per-chat flash.
 %hook UINavigationController
 
 - (UIViewController *)popViewControllerAnimated:(BOOL)animated {
@@ -4405,14 +4133,23 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (!isTweakEnabled()) return;
 
     NSString *conversationListTitle = getConversationListTitle();
-    UIColor *titleColor = getConversationListTitleColor();
-    BOOL ctcEnabled = isCustomTextColorsEnabled();
-    UIColor *otherColor = ctcEnabled ? getTitleTextColor() : nil;
+    UIColor *convListTitleColor = getConversationListTitleColor();
+    NSString *chatName = gWAMCurrentContactName;
+    UIColor *chatNameColor = chatName.length ? getChatContactNameColor() : nil;
+    UIColor *tintColor = getSystemTintColor();
 
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSString *chatTrim = [chatName stringByTrimmingCharactersInSet:ws];
     void (^handle)(UILabel *) = ^(UILabel *label) {
-        BOOL isTitleLabel = [label.text isEqualToString:@"Messages"] || [label.text isEqualToString:conversationListTitle];
-        UIColor *target = isTitleLabel ? titleColor : otherColor;
-        if (isTitleLabel) label.text = conversationListTitle;
+        NSString *labelTrim = [label.text stringByTrimmingCharactersInSet:ws];
+        BOOL isChatName = chatTrim.length && [labelTrim isEqualToString:chatTrim];
+        BOOL isConvListTitle = !isChatName &&
+            ([labelTrim isEqualToString:@"Messages"] || [labelTrim isEqualToString:conversationListTitle]);
+        UIColor *target = nil;
+        if (isChatName) target = chatNameColor;
+        else if (isConvListTitle) target = convListTitleColor;
+        else target = tintColor;
+        if (isConvListTitle) label.text = conversationListTitle;
         if (target) {
             if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
                 objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -4498,11 +4235,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %hook CKPinnedConversationView
 
-// Parallel pinned-tap hook on the outer bubble view. The inner SummaryBubble
-// hook may not fire on its own (a parent gesture recognizer can swallow the
-// touch before reaching it), so we hook both. The override mechanism keeps
-// either one safe — even if the wrong label is captured, it doesn't pollute
-// gWAMCurrentContactName beyond this call.
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     %orig;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return;
@@ -4552,9 +4284,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
-    // See unpinned hook for rationale. Schedule the chatIdentifier lookup +
-    // alias reconcile on the next runloop tick so the tap path completes
-    // without interference; migration lands within ~1 tick of the tap.
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -4744,15 +4473,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     }
 }
 
-// Swap in a single chat-bg subview (color or image). Per-contact selection is
-// baked into the helpers — getChatImagePath returns per-contact when one exists
-// for the active chat and the global path otherwise, and getEffectiveChatBgBlur
-// matches it. One image view, no overlay, no separate per-contact codepath.
-// Idempotent: tags self.view with the last-applied state and short-circuits
-// when the desired state already matches. Refuses to strip an existing bg on a
-// transient empty state (e.g. a layout pass where the title hasn't propagated
-// yet) — only swaps when there's a concrete new state to apply or when prefs
-// truly disable the bg.
 %new
 -(void)updateChatBackground {
     static const char kBgStateKey = 0;
@@ -4760,7 +4480,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     NSString *desiredState = nil;
     BOOL useColor = isChatColorBgEnabled();
     NSString *desiredPath = nil;
-
 
     if (useColor) {
         UIColor *c = getChatBackgroundColor();
@@ -4770,9 +4489,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     } else if (shouldShowAnyChatBgImage()) {
         desiredPath = getChatImagePath();
         CGFloat blur = getEffectiveChatBgBlur();
-        // Include the file's modification time so swapping the image at the same
-        // path (e.g. picking a new per-contact image) invalidates the idempotent
-        // check and forces a re-render.
         NSDictionary *attrs = desiredPath ? [[NSFileManager defaultManager] attributesOfItemAtPath:desiredPath error:nil] : nil;
         NSTimeInterval mtime = [(NSDate *)attrs[NSFileModificationDate] timeIntervalSince1970];
         desiredState = [NSString stringWithFormat:@"img:%@|%.2f|%.0f", desiredPath ?: @"", blur, mtime];
@@ -4857,20 +4573,10 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 -(void)viewWillAppear:(BOOL)animated {
     %orig;
     if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
-    // Flag flips ON here — getCurrentContactName will now return the active
-    // chat's name (allowing per-contact reads); previously it was returning
-    // nil because the flag was off (or never reached, since the conv list
-    // was the active surface).
     gWAMChatIsActiveSurface = YES;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
 }
 
-// Direct signal that the active chat changed — fires synchronously when iOS
-// Messages assigns the new conversation, before any UI lag, regardless of how
-// the chat was opened (cell tap, pinned tap, peek-preview, notification,
-// cold-launch). Hooks both setCurrentConversation: and _setCurrentConversation:
-// because iOS versions differ on which one is the actual setter; the inactive
-// hook just won't fire.
 - (void)setCurrentConversation:(id)conversation {
     %orig;
     [self wamHandleConversationChanged:conversation];
@@ -4884,13 +4590,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 %new
 - (void)wamHandleConversationChanged:(id)conversation {
     if (!isTweakEnabled()) return;
-    // iOS Messages calls setCurrentConversation:nil transiently while the
-    // user is still INSIDE the chat (we've seen it fire 2-3 seconds after
-    // entry). Ignore the nil. The pop hooks and CKMessagesController's
-    // viewWillDisappear are the authoritative signals for "user actually
-    // left the chat"; both clear gWAMCurrentContactName explicitly. Clearing
-    // here would wipe the cache while the chat is still on screen and the
-    // next updateBg would fall back to the global image.
     if (!conversation) return;
     if (!isPerContactChatBgEnabled()) return;
 
@@ -4923,12 +4622,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     [self updateChatBackground];
     gWAMTriggerNameOverride = nil;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
-    // Invalidate the navbar's UIKit tint cache so the back/FaceTime buttons
-    // re-query our tintColor hook with the now-populated chat name. Without
-    // this, those buttons stay at whatever tint they cached at construction
-    // time (typically global, since they were created before _currentConversation
-    // was set) until something else fires tintColorDidChange — like visiting
-    // the details pane and coming back.
     NSMutableArray *winList = [NSMutableArray array];
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -4959,23 +4652,12 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %new
 - (void)wamClearChatAndForceRefresh {
-    // The single chokepoint for "user left a chat" cleanup. Called from
-    // every lifecycle path that might mean "no chat is active anymore":
-    // viewWillDisappear-with-pop, viewDidDisappear-with-pop,
-    // didMoveToParentViewController:nil. Idempotent — safe to invoke
-    // multiple times. If the flag is already off, just no-ops on the state
-    // changes but still fires the redraws (cheap and corrects any drift).
     if (gWAMChatIsActiveSurface) {
         gWAMChatIsActiveSurface = NO;
         gWAMCurrentContactName = nil;
         gWAMCurrentContactDisplayName = nil;
     }
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
-    // Walk every window in every scene, find the conv list controller and
-    // ANY visible view, and force a tint + layout + display refresh. This
-    // bypasses the notification observer chain entirely — useful when the
-    // observer fires too early (cells not mounted yet) or when iPad split-
-    // view paths skip the appearance lifecycle altogether.
     Class listCls = %c(CKConversationListCollectionViewController);
     NSMutableArray *winList = [NSMutableArray array];
     if (@available(iOS 13.0, *)) {
@@ -5007,38 +4689,17 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 - (void)didMoveToParentViewController:(UIViewController *)parent {
     %orig;
     if (!isTweakEnabled()) return;
-    // parent == nil means this controller has just been removed from its
-    // parent's childViewControllers — fully popped / fully dismissed. The
-    // single most reliable signal that the user has actually left the chat.
     if (!parent) {
         [self wamClearChatAndForceRefresh];
     }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
-    // When the chat is genuinely being removed from its parent (not just
-    // having a child like the details view pushed on top), clear the cached
-    // name so anything rendering during the pop animation reads globals.
-    // getCurrentContactName falls back to gWAMCurrentContactName when the
-    // walker misses; nulling it here is what keeps the conv list clean
-    // after we leave the chat.
     if (isTweakEnabled() && (self.isMovingFromParentViewController || self.isBeingDismissed)) {
-        // Flag OFF — walker now returns nil for everyone that asks. Every
-        // effectiveValueForKey read falls back to globals, so the conv list
-        // (and anything else not in a chat) shows globals immediately.
         gWAMChatIsActiveSurface = NO;
         gWAMCurrentContactName = nil;
         gWAMCurrentContactDisplayName = nil;
         [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
-        // Cells in the conv list may not yet be mounted at this moment (the
-        // pop animation is still bringing them back into view). Fire the
-        // notification several more times over the next 500ms so whenever the
-        // cells are actually visible, their observer gets a refresh signal.
-        // Also do a hard, direct redraw: walk every window, find every live
-        // conv list controller, call handlePrefsChanged on it — guarantees a
-        // repaint even on iPad / split-view paths where viewDidAppear may
-        // never fire on the conv list because it never "appeared" (it was
-        // always visible behind the chat panel).
         for (int i = 1; i <= 5; i++) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(i * 0.1 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
@@ -5065,41 +4726,19 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     %orig;
 }
 
-// viewWillAppear's notification posts may land too early on initial entry —
-// the transcript controller's collection view often isn't loaded yet when the
-// chat first appears, so reloadData has nothing to operate on and bubble
-// cells never get the chance to re-evaluate per-contact colors. Post again
-// from viewDidAppear, which fires after layout has fully settled.
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     if (!isTweakEnabled()) return;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
-    // iOS Messages populates _currentConversation._chat.displayName
-    // asynchronously after viewDidAppear. Re-fire the refresh a few times
-    // over the next 3s so the per-contact image lands as soon as the name
-    // is readable, without waiting for the user to do something else
-    // (open control center, switch apps) to trigger it.
     [self wamRetryBgRefresh:0];
 }
 
 %new
 - (void)wamRetryBgRefresh:(int)attempt {
     if (!isTweakEnabled()) return;
-    // Bail if user genuinely left this chat (nav-popped).
     UINavigationController *nav = self.navigationController;
     if (nav && ![nav.viewControllers containsObject:self]) return;
-    // Drive the walker. updateChatBackground is internally idempotent — if
-    // nothing changed (same name, same image), it returns early without
-    // touching the view hierarchy, so this is cheap on the no-change path.
     [self updateChatBackground];
-    // Three-stage cadence:
-    //   • 50ms for the first 6 ticks (~300ms total) — race the walker against
-    //     iOS's first frame so post-rename migration lands before the user
-    //     sees a global-image flash.
-    //   • 200ms for the next ~3s — catches cold-start name population where
-    //     _currentConversation takes a while to wire up.
-    //   • 500ms thereafter — detects chat-panel switches inside the reused
-    //     controller without burning CPU.
     NSTimeInterval delay;
     if (attempt < 6)       delay = 0.05;
     else if (attempt < 21) delay = 0.2;
@@ -5171,9 +4810,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
     if ([self isKindOfClass:%c(CKColoredBalloonView)]) {
         CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
-        // Pick the right color for ALL types — previously sent/sms fell through to %orig
-        // untouched, which is why the new sent bubble flashed system blue during its send
-        // animation (the bubble image is on the balloon itself for the new outgoing message).
         UIColor *targetColor = nil;
         BOOL applyReceivedInsets = NO;
         if (coloredSelf.color == -1) {
@@ -5201,8 +4837,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
             UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
             UIGraphicsEndImageContext();
 
-            // The +6/-8 alignment tweak is specific to received bubbles (tail on left);
-            // applying it to sent would shift the bubble's text incorrectly.
             if (applyReceivedInsets) {
                 alignmentInsets.left += 6.0;
                 alignmentInsets.right -= 8.0;
@@ -5422,11 +5056,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 %hook _UIVisualEffectBackdropView
 
-// Listen to prefs changes unconditionally; check the parent chain at handler
-// time. The backdrop view's superview chain isn't always finalized at
-// didMoveToWindow (especially in iOS 15+ where the message entry view's
-// hierarchy assembles late), so deferring the CKMessageEntryView check until
-// the notification actually fires catches more cases.
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
@@ -5514,10 +5143,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     if (!isInMessageInput || isInKeyboard || !effectView) return;
 
-    // If we left modern mode but the effect view still carries our modern
-    // state (expanded frame, gradient mask, tint sublayer), peel it off so
-    // the stock bar can take over cleanly. Without this the modern gradient
-    // sits under the stock bar until the app is relaunched.
     if (!isModernMessageBarEnabled()) {
         if ([self.layer.mask isKindOfClass:[CAGradientLayer class]]) self.layer.mask = nil;
         for (CALayer *sub in [self.layer.sublayers copy]) {
@@ -5950,8 +5575,6 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 %new
 -(void)handleInputFieldPrefsChanged {
     refreshPrefs();
-    // Force the backdrop view's layoutSubviews to run so the modern↔stock
-    // transition takes effect immediately, not just on re-entering the chat.
     [self setNeedsLayoutRecursively:self];
     [self layoutIfNeeded];
     if (isInputFieldCustomizationEnabled()) [self applyInputFieldCustomization];
@@ -6339,12 +5962,6 @@ static const char kWAMOriginalImageKey = 0;
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-
-    // Header install is deferred to layoutSubviews where we can reliably
-    // check whether iOS rendered a CKGroupPhotoCell at the top of the
-    // details pane. Name-based detection was unreliable — iOS Messages's
-    // display name shifts between entries as contact resolution settles
-    // (raw handle → contact name, GUID → participant list).
     objc_setAssociatedObject(self, "wam_headerChecked", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     [self updateDetailsBackground];
@@ -6363,24 +5980,40 @@ static const char kWAMOriginalImageKey = 0;
     [self updateDetailsBackground];
 }
 
-// Photo cell is now sized large enough via the height delegate to fully
-// contain the button — touches route through UITableView normally. This
-// override is a defensive backstop: if the button ever overflows the cell
-// (e.g. during layout transitions), route those touches to the button.
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    if (objc_getAssociatedObject(self, "wam_headerChecked")) return;
     UITableView *tv = (UITableView *)self;
-    if (tv.visibleCells.count == 0) return; // wait until cells are laid out
-    objc_setAssociatedObject(self, "wam_headerChecked", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (tv.visibleCells.count == 0) return;
+
     BOOL hasPhotoCell = NO;
     for (UITableViewCell *cell in tv.visibleCells) {
         if ([cell isKindOfClass:%c(CKGroupPhotoCell)]) { hasPhotoCell = YES; break; }
     }
-    if (!hasPhotoCell && !tv.tableHeaderView) {
-        [self wamInstallCustomizeHeader];
+    if (hasPhotoCell) {
+        objc_setAssociatedObject(self, "wam_everSawPhotoCell", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    if (objc_getAssociatedObject(self, "wam_everSawPhotoCell")) return;
+    if (objc_getAssociatedObject(self, "wam_headerInstallScheduled")) return;
+    if (tv.tableHeaderView) return;
+
+    objc_setAssociatedObject(self, "wam_headerInstallScheduled", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak typeof(self) weakSelf = self;
+    __weak typeof(tv) weakTv = tv;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        __strong typeof(weakTv) strongTv = weakTv;
+        if (!strongSelf || !strongTv) return;
+        if (objc_getAssociatedObject(strongSelf, "wam_everSawPhotoCell")) return;
+        if (strongTv.tableHeaderView) return;
+        for (UITableViewCell *cell in strongTv.visibleCells) {
+            if ([cell isKindOfClass:%c(CKGroupPhotoCell)]) {
+                objc_setAssociatedObject(strongSelf, "wam_everSawPhotoCell", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                return;
+            }
+        }
+        [strongSelf wamInstallCustomizeHeader];
+    });
 }
 
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
@@ -6405,11 +6038,6 @@ static const char kWAMOriginalImageKey = 0;
     return %orig;
 }
 
-// Swizzle the delegate's heightForRowAtIndexPath: to add 70pt to the photo
-// cell row. UITableView then natively positions the photo cell taller, with
-// our button sitting inside the cell's expanded bottom, and natively lays
-// out every cell below at the correct y — no after-the-fact frame shifting,
-// no fight with the layout engine, no scroll pops.
 - (void)setDelegate:(id<UITableViewDelegate>)delegate {
     %orig;
     if (delegate && isTweakEnabled() && isPerContactChatBgEnabled()) {
@@ -6434,24 +6062,14 @@ static const char kWAMOriginalImageKey = 0;
             CGFloat origH = ((CGFloat (*)(id, SEL, UITableView *, NSIndexPath *))origImp)(self_, sel, tv, ip);
             if (![tv isKindOfClass:%c(CKDetailsTableView)]) return origH;
             if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return origH;
-            // Photo cell is row 0 section 0 in the Details table.
             if (ip.section == 0 && ip.row == 0) return origH + 64;
             return origH;
         });
         method_setImplementation(existing, newImp);
     } else {
-        // Bail. Don't inject the method ourselves — some chat-detail delegate
-        // classes (Me / certain group chats) don't implement heightForRow and
-        // rely on UITableView's rowHeight property. Injecting a method here
-        // would force UITableView to call us for every row; returning
-        // UITableViewAutomaticDimension on a non-self-sizing table would
-        // collapse every row to 0pt and blank out the entire details pane.
-        // The cost of bailing is that the photo cell won't be expanded to
-        // contain the button — but the rest of the pane stays intact.
         return;
     }
 
-    // Force the table to re-query the row heights now that we've swizzled.
     if (self.window) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (![self isKindOfClass:%c(CKDetailsTableView)]) return;
@@ -6462,9 +6080,6 @@ static const char kWAMOriginalImageKey = 0;
     }
 }
 
-// Build a tableHeaderView with the Customize button inside, for chats that
-// don't have a CKGroupPhotoCell. The visual is the same as the embedded
-// button: blur-backed, tinted pill, centered "Customize This Chat" label.
 %new
 - (void)wamInstallCustomizeHeader {
     UITableView *tv = (UITableView *)self;
@@ -6480,7 +6095,6 @@ static const char kWAMOriginalImageKey = 0;
     blur.translatesAutoresizingMaskIntoConstraints = NO;
     [header addSubview:blur];
 
-    // Clear the system-painted backdrop so our tint can render cleanly.
     for (UIView *sub in blur.subviews) {
         if ([sub isKindOfClass:%c(_UIVisualEffectSubview)]) sub.backgroundColor = [UIColor clearColor];
     }
@@ -6504,7 +6118,7 @@ static const char kWAMOriginalImageKey = 0;
         id raw = getPerContactOverride(gWAMCurrentContactName, stKey);
         if (raw) tc = colorFromHex(raw);
     }
-    if (!tc) tc = isCustomTextColorsEnabled() ? getTitleTextColor() : getSystemTintColor();
+    if (!tc) tc = getSystemTintColor();
     titleLabel.textColor = tc ?: [UIColor labelColor];
     titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [blur.contentView addSubview:titleLabel];
@@ -6559,11 +6173,6 @@ static const char kWAMOriginalImageKey = 0;
     refreshPrefs();
     [self updateDetailsBackground];
     [self applyDetailsNavTitleColor];
-    // Cells that read prefs in layoutSubviews will re-pick them up via
-    // setNeedsLayout; full reloadData was tearing the table down hard enough
-    // that some chat-detail variants (Self / certain group chats) could never
-    // settle into a rendered state with the chat-lifecycle hooks now posting
-    // notifications back-to-back.
     for (UITableViewCell *cell in self.visibleCells) {
         [cell setNeedsLayout];
     }
@@ -6571,12 +6180,8 @@ static const char kWAMOriginalImageKey = 0;
 
 %new
 - (void)applyDetailsNavTitleColor {
-    // iOS 15: the Details nav bar title (the contact's name that appears once you scroll
-    // down). UINavigationItem.standardAppearance/etc. lets a VC override the shared
-    // nav bar's appearance for just that VC — that's exactly the per-VC scoping we want,
-    // so we don't mutate the bar's own appearance (which is shared across the nav stack).
-    if (!isiOS15() || !isCustomTextColorsEnabled()) return;
-    UIColor *titleColor = getTitleTextColor();
+    if (!isiOS15() || !isTweakEnabled()) return;
+    UIColor *titleColor = getChatContactNameColor();
     if (!titleColor) return;
 
     UIViewController *vc = [self _viewControllerForAncestor];
@@ -6584,8 +6189,6 @@ static const char kWAMOriginalImageKey = 0;
 
     NSDictionary *attrs = @{ NSForegroundColorAttributeName: titleColor };
 
-    // Seed from the bar's appearance if the navigationItem hasn't customized one yet,
-    // so we keep the bar's existing background/buttons and only override title color.
     UINavigationBar *bar = vc.navigationController.navigationBar;
     UINavigationBarAppearance *base = vc.navigationItem.standardAppearance
         ?: (bar.standardAppearance ?: [[UINavigationBarAppearance alloc] init]);
@@ -6601,7 +6204,6 @@ static const char kWAMOriginalImageKey = 0;
 %new
 - (void)updateDetailsBackground {
     if (isiOS17OrHigher()) {
-        // Let UIViewControllerWrapperView handle the background on iOS 17
         self.backgroundView = nil;
         self.backgroundColor = [UIColor clearColor];
         return;
@@ -6665,22 +6267,46 @@ static const char kWAMOriginalImageKey = 0;
         }
     }
 
-
-
-
 %new
 - (void)applySearchBackground {
     UIView *parent = self.superview;
     BOOL isInDetailsView = NO;
+    BOOL isInPushedDetailsSubmenu = NO;
     int levels = 0;
     while (parent && levels < 15) {
         if ([parent isKindOfClass:%c(CKDetailsTableView)]) { isInDetailsView = YES; break; }
+        if (!isInPushedDetailsSubmenu &&
+            [NSStringFromClass([parent class]) isEqualToString:@"_UIParallaxDimmingView"]) {
+            isInPushedDetailsSubmenu = YES;
+        }
         parent = parent.superview;
         levels++;
     }
 
     if (isInDetailsView) {
         self.backgroundColor = [UIColor clearColor];
+        return;
+    }
+
+    if (isInPushedDetailsSubmenu) {
+        UIImage *chatBgImage = loadImageUncached(getChatImagePath());
+        if (isChatColorBgEnabled()) {
+            self.backgroundView = nil;
+            self.backgroundColor = getChatBackgroundColor();
+        } else if (chatBgImage && shouldShowAnyChatBgImage()) {
+            CGFloat blurAmount = getEffectiveChatBgBlur();
+            if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
+            UIImageView *imageView = [[UIImageView alloc] initWithImage:chatBgImage];
+            imageView.contentMode = UIViewContentModeScaleAspectFill;
+            imageView.clipsToBounds = YES;
+            imageView.frame = self.bounds;
+            imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            self.backgroundView = imageView;
+            self.backgroundColor = [UIColor clearColor];
+        } else {
+            self.backgroundView = nil;
+            self.backgroundColor = [UIColor clearColor];
+        }
         return;
     }
 
@@ -6775,12 +6401,6 @@ static const char kWAMOriginalImageKey = 0;
     if (isPerContactChatBgEnabled()) [self wamCacheNameAndRefreshChatBg];
 }
 
-// We grow the photo cell by 70pt via the delegate's height callback, but
-// UITableView stretches this contact view to fill the new cell — and the
-// contact view's internal constraints redistribute the extra space between
-// the avatar, name, and action row. Clamp the height back to the natural
-// 213pt so the contact contents stay at their normal positions and the
-// extra 70pt sits cleanly at the cell's bottom for our button.
 - (void)setFrame:(CGRect)frame {
     CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 213) {
@@ -6792,13 +6412,6 @@ static const char kWAMOriginalImageKey = 0;
 
 %new
 - (void)wamCacheNameAndRefreshChatBg {
-    // The contact view's label is the right place to grab a freshly-resolved
-    // human-readable display name from (iOS finishes Contacts.framework
-    // resolution lazily, often after the conversation has already been set).
-    // BUT we must NOT overwrite gWAMCurrentContactName — that's the storage
-    // KEY (chat identifier / handle), set by the conversation hook to a
-    // value that's stable across resolution. We only cache the readable
-    // label into gWAMCurrentContactDisplayName for the menu title.
     NSString *displayed = [self displayedContactName];
     if (!displayed.length) return;
     if ([displayed isEqualToString:gWAMCurrentContactDisplayName]) return;
@@ -6808,8 +6421,6 @@ static const char kWAMOriginalImageKey = 0;
 
 %new
 - (NSString *)displayedContactName {
-    // Read the name straight off the contact view's own label. The label is
-    // either a direct subview (iOS 15) or nested inside two UIStackViews (iOS 16+).
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UILabel class]]) {
             NSString *t = ((UILabel *)subview).text;
@@ -6832,12 +6443,9 @@ static const char kWAMOriginalImageKey = 0;
 
 %new
 - (void)applyContactNameColor {
-    UIColor *titleColor = getTitleTextColor();
+    UIColor *titleColor = getChatContactNameColor();
     if (!titleColor) return;
 
-    // iOS 16+ layout: the name label is nested inside UIStackViews.
-    // iOS 15 layout: the name label is a direct child of self.subviews.
-    // Cover both by recoloring direct UILabel children AND walking stack views.
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UILabel class]]) {
             ((UILabel *)subview).textColor = titleColor;
@@ -6912,14 +6520,6 @@ static const char kWAMOriginalImageKey = 0;
     %orig([UIColor clearColor]);
 }
 
-// Force a minimum 277pt cell height. For named groups + 1:1 chats the height
-// delegate swizzle already grows the cell to 277pt, so this is a no-op. For
-// unnamed groups (where the delegate doesn't implement heightForRow and we
-// bail out of the swizzle to keep the details pane from collapsing) iOS
-// would otherwise lay the cell at its natural 213pt — leaving no empty band
-// at the bottom for the Customize button, so the button rendered behind the
-// action row icons and read as "missing". Pushing back here ensures the
-// 64pt band exists regardless of how iOS sized the row.
 - (void)setFrame:(CGRect)frame {
     CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 0 && frame.size.height < 277) {
@@ -6929,17 +6529,11 @@ static const char kWAMOriginalImageKey = 0;
     %orig(frame);
 }
 
-// UIKit keeps flipping clipsToBounds back to YES on the cell — the logs showed
-// our blur view at y=220 in a 213pt-tall cell, getting clipped off-screen.
-// Refuse the YES so the button can extend below the cell.
 - (void)setClipsToBounds:(BOOL)clips {
     if (isTweakEnabled() && isPerContactChatBgEnabled()) { %orig(NO); return; }
     %orig(clips);
 }
 
-// Hit testing respects bounds even when clipsToBounds is NO, so our button
-// (positioned at y > cell.bounds.height) wouldn't receive taps. Override
-// pointInside to include the blur's frame as part of the tappable area.
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
     if (%orig) return YES;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return NO;
@@ -6950,10 +6544,6 @@ static const char kWAMOriginalImageKey = 0;
     return NO;
 }
 
-// Push the cell's reported size up across every UIKit sizing path so the table
-// view gives us extra room below the action icons. clipsToBounds disabled on
-// both the cell and its contentView so the button can extend past the cell's
-// bounds if the table doesn't honor the size growth.
 - (CGSize)sizeThatFits:(CGSize)size {
     CGSize sz = %orig;
     if (isTweakEnabled() && isPerContactChatBgEnabled()) sz.height += 64;
@@ -6972,11 +6562,6 @@ static const char kWAMOriginalImageKey = 0;
     return sz;
 }
 
-// Find the action row by locating any CNActionView in our subtree (the
-// individual call/video/mail/info buttons) and taking its superview — that's
-// the action row container regardless of what class it actually is. Pin our
-// button below it. Falls back to cell.bottom only if no action views are
-// found at all.
 %new
 - (void)ensurePerContactBgButton {
     static const NSInteger kBlurTag = 87731;
@@ -7041,10 +6626,6 @@ static const char kWAMOriginalImageKey = 0;
             [btn.trailingAnchor constraintEqualToAnchor:blur.contentView.trailingAnchor],
         ] mutableCopy];
 
-        // Anchor to the cell's bottom — the cell is grown 70pt via the
-        // height delegate, contact view is clamped to its natural 213pt,
-        // so this pins the button into the resulting empty band cleanly,
-        // independent of where the action row ends up.
         [constraints addObject:[blur.bottomAnchor constraintEqualToAnchor:host.bottomAnchor constant:-4]];
 
         [NSLayoutConstraint activateConstraints:constraints];
@@ -7053,16 +6634,11 @@ static const char kWAMOriginalImageKey = 0;
         tintOverlay = [blur viewWithTag:kTintTag];
     }
 
-    // Darkness fix: clear _UIVisualEffectSubview (which is the system-painted
-    // dark backdrop that was making the button look brown-black). Without it,
-    // the tint overlay below can do its job without compounding to too dark.
     for (UIView *sub in blur.subviews) {
         if ([sub isKindOfClass:%c(_UIVisualEffectSubview)]) {
             sub.backgroundColor = [UIColor clearColor];
         }
     }
-    // Tint overlay at 0.35 alpha — between the 0.5 (too solid) and 0.2
-    // (too washed-out) variants we tried.
     if (isCellBlurTintEnabled()) {
         UIColor *tint = getCellBlurTintColor();
         tintOverlay.backgroundColor = tint ? [tint colorWithAlphaComponent:0.35] : [UIColor clearColor];
@@ -7070,26 +6646,19 @@ static const char kWAMOriginalImageKey = 0;
         tintOverlay.backgroundColor = [UIColor clearColor];
     }
 
-    // Per-contact system tint wins over the global isCustomTextColorsEnabled
-    // path so the user's accent for this chat ALWAYS colors the button.
     UIColor *tc = nil;
     if (chatHasPerContactOverride()) {
         NSString *stKey = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
         id raw = getPerContactOverride(gWAMCurrentContactName, stKey);
         if (raw) tc = colorFromHex(raw);
     }
-    if (!tc) tc = isCustomTextColorsEnabled() ? getTitleTextColor() : getSystemTintColor();
+    if (!tc) tc = getSystemTintColor();
     titleLabel.textColor = tc ?: [UIColor labelColor];
 
     titleLabel.text = @"Customize This Chat";
 
     [host bringSubviewToFront:blur];
 
-    // Unclip ONLY the cell + contentView so the blur can extend past the cell
-    // bounds. Don't touch the blur itself (its masksToBounds must stay YES for
-    // corner rounding), and don't climb higher than the cell — disabling
-    // clipping on UINavigationTransitionView etc. caused cells to render past
-    // the nav bar during scroll and pop-clip when fully out of view.
     host.clipsToBounds = NO;
     host.layer.masksToBounds = NO;
     cell.clipsToBounds = NO;
@@ -7139,6 +6708,9 @@ static const char kWAMOriginalImageKey = 0;
         if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
             [subview removeFromSuperview];
         }
+        if (subview.tag == 12346) {
+            [subview removeFromSuperview];
+        }
     }
 
     UIBlurEffect *blur = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
@@ -7161,21 +6733,46 @@ static const char kWAMOriginalImageKey = 0;
     if (isCellBlurTintEnabled()) {
         UIColor *tintColor = getCellBlurTintColor();
         if (tintColor) {
-            UIView *tintOverlay = [[UIView alloc] initWithFrame:blurView.contentView.bounds];
-            tintOverlay.userInteractionEnabled = NO;
-            tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-            tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
-            [blurView.contentView addSubview:tintOverlay];
+            [self wamRefreshTintInBackdrop:blurView color:tintColor];
         }
     }
+}
+
+%new
+- (void)wamRefreshTintInBackdrop:(UIVisualEffectView *)blurView color:(UIColor *)tintColor {
+    UIView *tintOverlay = [self viewWithTag:12346];
+    if (!tintOverlay) {
+        tintOverlay = [[UIView alloc] initWithFrame:self.bounds];
+        tintOverlay.tag = 12346;
+        tintOverlay.userInteractionEnabled = NO;
+        tintOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        tintOverlay.layer.cornerRadius = self.layer.cornerRadius;
+        tintOverlay.clipsToBounds = YES;
+    }
+    tintOverlay.backgroundColor = [tintColor colorWithAlphaComponent:0.5];
+
+    NSUInteger blurIdx = [self.subviews indexOfObject:blurView];
+    NSUInteger desiredIdx = (blurIdx == NSNotFound) ? 1 : blurIdx + 1;
+    if (tintOverlay.superview != self || [self.subviews indexOfObject:tintOverlay] != desiredIdx) {
+        [tintOverlay removeFromSuperview];
+        if (desiredIdx >= self.subviews.count) {
+            [self addSubview:tintOverlay];
+        } else {
+            [self insertSubview:tintOverlay atIndex:desiredIdx];
+        }
+    }
+    tintOverlay.frame = self.bounds;
+    tintOverlay.layer.cornerRadius = self.layer.cornerRadius;
 }
 
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
 
+    BOOL hasOurBlur = NO;
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIVisualEffectView class]] && subview.tag == 12345) {
+            hasOurBlur = YES;
             subview.frame = self.bounds;
             subview.layer.cornerRadius = self.layer.cornerRadius;
             UIVisualEffectView *blurView = (UIVisualEffectView *)subview;
@@ -7187,17 +6784,14 @@ static const char kWAMOriginalImageKey = 0;
             if (isCellBlurTintEnabled()) {
                 UIColor *tintColor = getCellBlurTintColor();
                 if (tintColor) {
-                    for (UIView *contentSubview in blurView.contentView.subviews) {
-                        if ([contentSubview class] == [UIView class]) {
-                            contentSubview.backgroundColor = [tintColor colorWithAlphaComponent:0.3];
-                            contentSubview.frame = blurView.contentView.bounds;
-                            break;
-                        }
-                    }
+                    [self wamRefreshTintInBackdrop:blurView color:tintColor];
                 }
             }
             break;
         }
+    }
+    if (!hasOurBlur) {
+        [self applyActionViewBlur];
     }
 
     UIColor *actionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
@@ -8666,12 +8260,10 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
             }
         }
     }
-    if (isCustomTextColorsEnabled()) {
-        UIColor *titleColor = getTitleTextColor();
-        if (titleColor) {
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = titleColor;
-            }
+    UIColor *tintColor = getSystemTintColor();
+    if (tintColor) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = tintColor;
         }
     }
 }
@@ -8764,14 +8356,19 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
+    UIView *v = (UIView *)self;
+    [v.layer removeAllAnimations];
+    NSMutableArray *layerStack = [NSMutableArray arrayWithArray:[v.layer.sublayers copy]];
+    while (layerStack.count) {
+        CALayer *l = layerStack.lastObject;
+        [layerStack removeLastObject];
+        [l removeAllAnimations];
+        if (l.sublayers.count) [layerStack addObjectsFromArray:l.sublayers];
+    }
     if (isiOS15()) [self updateWAMPinnedColors];
     [self applyPinnedBubbleStyle];
 }
 
-// Pinned bubbles aren't UICollectionViewCells so they don't get setHighlighted:.
-// touchesBegan fires on tap-down before any gesture recognizer takes over — same
-// pre-slide-in window as the cell hook. Walk the bubble for the largest UILabel
-// (contact name uses the biggest font; preview/status labels are smaller).
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     %orig;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return;
@@ -8821,9 +8418,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
-    // See unpinned hook for rationale. Schedule the chatIdentifier lookup +
-    // alias reconcile on the next runloop tick so the tap path completes
-    // without interference; migration lands within ~1 tick of the tap.
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         __strong typeof(weakSelf) strongSelf = weakSelf;
@@ -8849,29 +8443,26 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     }
     if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !((UIView *)self).window) return;
     [self applyPinnedBubbleStyle];
+    UIView *bubbleView = (UIView *)self;
+    [bubbleView.layer removeAllAnimations];
+    for (CALayer *sublayer in [bubbleView.layer.sublayers copy]) {
+        [sublayer removeAllAnimations];
+    }
 }
 
 %new
 - (void)handleWAMPinnedPrefsChanged {
     refreshPrefs();
     [self updateWAMPinnedColors];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     [self applyPinnedBubbleStyle];
-    [(UIView *)self setNeedsLayout];
-    [(UIView *)self layoutIfNeeded];
+    [CATransaction commit];
 }
 
 %new
 - (void)updateWAMPinnedColors {
     NSDictionary *prefs = loadPrefs();
-    // Pinned bubbles live in the conv list — they're rendered on a surface
-    // that shows multiple chats at once, so per-contact values would be
-    // wrong (whose contact's color do you pick?). When the user hasn't set
-    // an explicit pinnedBubbleColor pref, fall back to the GLOBAL received
-    // bubble color (read prefs directly, never effectiveValueForKey). Without
-    // this bypass the fallback would inherit the active chat's per-contact
-    // received bubble color, freezing it into WAMPinnedBubbleCurrentColor and
-    // making pinned previews stay tinted with the last-viewed chat's color
-    // long after the user has left that chat.
     NSString *recvKey = isDarkMode() ? @"receivedBubbleColorDark" : @"receivedBubbleColor";
     NSString *recvTextKey = isDarkMode() ? @"receivedTextColorDark" : @"receivedTextColor";
     UIColor *globalRecv = colorFromHex(prefs[recvKey]) ?: [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
@@ -8895,19 +8486,34 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     UIColor *textColor = isiOS15() ? WAMPinnedTextCurrentColor : getPinnedBubbleTextColor();
     if (!bubbleColor && !textColor) return;
 
-    for (CALayer *sublayer in ((UIView *)self).layer.sublayers) {
-        if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
-            if (bubbleColor) sublayer.backgroundColor = bubbleColor.CGColor;
-        } else if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewShadowLayer)]) {
-            sublayer.opacity = 0.3;
+    static const char kLastBubbleColorKey = 0;
+    UIColor *prevBubble = objc_getAssociatedObject(self, &kLastBubbleColorKey);
+    BOOL bubbleSame = (prevBubble == bubbleColor) ||
+                      (prevBubble && bubbleColor && [prevBubble isEqual:bubbleColor]);
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    if (!bubbleSame && bubbleColor) {
+        objc_setAssociatedObject(self, &kLastBubbleColorKey, bubbleColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        for (CALayer *sublayer in ((UIView *)self).layer.sublayers) {
+            if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewBackdropLayer)]) {
+                sublayer.backgroundColor = bubbleColor.CGColor;
+            } else if ([sublayer isKindOfClass:%c(CKPinnedConversationActivityItemViewShadowLayer)]) {
+                sublayer.opacity = 0.3;
+            }
         }
     }
     if (textColor) {
         for (UIView *subview in ((UIView *)self).subviews) {
-            if ([subview isKindOfClass:[UILabel class]])
-                ((UILabel *)subview).textColor = textColor;
+            if ([subview isKindOfClass:[UILabel class]]) {
+                UILabel *label = (UILabel *)subview;
+                if (![label.textColor isEqual:textColor]) {
+                    label.textColor = textColor;
+                }
+            }
         }
     }
+    [CATransaction commit];
 }
 
 - (void)dealloc {
@@ -9106,13 +8712,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 %end
 
 %hook CNContactHeaderDisplayView
-
-// Unnamed group chats (and certain 1:1 contact details) use this container
-// instead of CNGroupIdentityHeaderContainerView. Clamp it to its natural 213pt
-// height too — without this, the contact header stretches to fill our grown
-// cell, leaving no empty band at the bottom for the Customize This Chat
-// button to sit in, so the button overlaps the action row and reads as
-// "missing" even though it's actually being added behind the icons.
 - (void)setFrame:(CGRect)frame {
     CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 213) {
@@ -9124,8 +8723,8 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isCustomTextColorsEnabled()) return;
-    UIColor *titleColor = getTitleTextColor();
+    if (!isTweakEnabled()) return;
+    UIColor *titleColor = getChatContactNameColor();
     if (!titleColor) return;
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = titleColor;
@@ -9134,16 +8733,12 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 - (void)didMoveToWindow {
     %orig;
-    if (NO) WAMLOG(@"CNContactHeaderDisplayView.didMoveToWindow frame=%@ super=%@",
-        NSStringFromCGRect(((UIView *)self).frame), NSStringFromClass([self.superview class]));
     if (!isTweakEnabled()) return;
     self.backgroundColor = [UIColor clearColor];
-    if (isCustomTextColorsEnabled()) {
-        UIColor *titleColor = getTitleTextColor();
-        if (titleColor) {
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = titleColor;
-            }
+    UIColor *titleColor = getChatContactNameColor();
+    if (titleColor) {
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = titleColor;
         }
     }
 }
@@ -9183,11 +8778,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 %end
 
 %hook UITableViewCell
-
-// iOS 15 only: CKDetails* table cells (Location, Map, SIM, SharedWithYou, etc.) are painted
-// with a dark fill at the cell level by the system grouped table style. Our blur sits on top
-// but doesn't fully hide it. Force the cell and its contentView transparent so whatever the
-// table backdrop is (chat bg or default) shows through.
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
     if (isTweakEnabled() && isiOS15()) {
         NSString *cls = NSStringFromClass([self class]);
@@ -9624,7 +9214,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 %end
 
-
 /* iOS 17 Specific Hooks */
 
 #define kWrapperBackgroundImageTag 0x57414D54
@@ -9796,7 +9385,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     }
     if (!isNoConversationView) return;
 
-    // Dispatch to end of runloop so the transition is fully settled before applying
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_main_queue(), ^{
         [weakSelf applyWrapperBackground];
@@ -9808,7 +9396,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     if (!isTweakEnabled()) return;
 
     if (isiOS17OrHigher()) {
-        // Only do a silent frame update — never add/remove/reorder views here
         UIView *contentView = nil;
         for (UIView *subview in self.subviews) {
             if ([subview isKindOfClass:[UIView class]] && ![subview isKindOfClass:[UIImageView class]]) {
@@ -9824,7 +9411,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         return;
     }
 
-    // iOS 16: just update image frame
     {
         UIView *parent = self.superview;
         BOOL isNoConversationView = NO;
@@ -10140,7 +9726,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 %end
 
-
 /* iOS 15 specific, mostly compatibility hooks */
 
 %hook CKMessageEntryWaveformView
@@ -10260,22 +9845,10 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     [self wamApplyChatBgForVisibleTitle];
 }
 
-// Disabled: navbar title is the display name, not the identifier used as the
-// per-contact storage key. Reading the title to drive cache updates would
-// stomp the identifier set by setCurrentConversation. setCurrentConversation
-// is the authoritative signal; this layout-pass heuristic is no longer
-// needed.
 %new
 - (void)wamApplyChatBgForVisibleTitle {
     return;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return;
-
-    // CKAvatarNavigationBar is a UINavigationBar subclass — its subview tree
-    // includes the navigation controller's shared elements (search field, edit
-    // button, badge labels) from whichever VC is on top of the nav stack. Only
-    // the chat title is a CKLabel; everything else is UIButtonLabel /
-    // UISearchBarTextFieldLabel / plain UILabel. Filter strictly on CKLabel
-    // so we never capture "Search" or "Edit" as the contact name.
     UILabel *best = nil;
     NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
     while (queue.count > 0) {
@@ -10317,9 +9890,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
     }
-    // No tap-driven alias reconcile here — nav bar isn't a cell, so the
-    // indexPath-based conv lookup wouldn't find anything. The walker's
-    // retry loop covers alias refresh when the nav title is the active surface.
 }
 
 - (void)didMoveToWindow {
@@ -10347,10 +9917,12 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 %new
 - (void)applyWAMTitleStyling {
-    if (!isTweakEnabled() || !isiOS15()) return;
+    if (!isTweakEnabled()) return;
 
     NSString *conversationListTitle = getConversationListTitle();
-    UIColor *titleColor = getConversationListTitleColor();
+    UIColor *convListTitleColor = isiOS15() ? getConversationListTitleColor() : nil;
+    NSString *chatContactName = gWAMCurrentContactName;
+    UIColor *chatNameColor = chatContactName.length ? getChatContactNameColor() : nil;
 
     NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
     while (queue.count > 0) {
@@ -10358,20 +9930,32 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         [queue removeObjectAtIndex:0];
         if ([view isKindOfClass:[UILabel class]]) {
             UILabel *label = (UILabel *)view;
-            if ([label.text isEqualToString:@"Messages"] ||
-                [label.text isEqualToString:conversationListTitle] ||
-                (WAMLastKnownTitle && [label.text isEqualToString:WAMLastKnownTitle])) {
+            if (isiOS15() &&
+                ([label.text isEqualToString:@"Messages"] ||
+                 [label.text isEqualToString:conversationListTitle] ||
+                 (WAMLastKnownTitle && [label.text isEqualToString:WAMLastKnownTitle]))) {
                 label.text = conversationListTitle;
-                if (titleColor) {
+                if (convListTitleColor) {
                     if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
                         objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     }
-                    label.textColor = titleColor;
+                    label.textColor = convListTitleColor;
                 } else {
                     id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
                     if (orig && orig != [NSNull null]) label.textColor = orig;
                 }
                 WAMLastKnownTitle = conversationListTitle;
+            }
+            else if (chatContactName.length && [label.text isEqualToString:chatContactName]) {
+                if (chatNameColor) {
+                    if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
+                        objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    }
+                    label.textColor = chatNameColor;
+                } else {
+                    id orig = objc_getAssociatedObject(label, &kWAMOrigTitleColorKey);
+                    if (orig && orig != [NSNull null]) label.textColor = orig;
+                }
             }
         }
         for (UIView *sub in view.subviews) {
@@ -10428,11 +10012,6 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         NULL,
         CFNotificationSuspensionBehaviorCoalesce
     );
-
-    // Kick off the heartbeat — runs every frame whenever no chat is the
-    // active surface, force-applying global colors to conv list cells. This
-    // is the safety net that catches every code path our lifecycle hooks
-    // miss (iPad split-view, custom transitions, anything weird in iOS 26).
     dispatch_async(dispatch_get_main_queue(), ^{
         [WAMHeartbeatTarget shared];
     });

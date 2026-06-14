@@ -150,6 +150,7 @@
 -(void)updateIconOpacity;
 -(void)applyActionViewBlur;
 - (void)applyActionColor:(UIColor *)color toView:(UIView *)view ;
+- (void)wamRefreshTintInBackdrop:(UIVisualEffectView *)blurView color:(UIColor *)tintColor;
 @end
 
 @interface CKTranscriptDetailsResizableCell : UICollectionViewCell

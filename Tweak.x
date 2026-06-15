@@ -13,7 +13,6 @@ It's open source after all.
 
 Here be dragons!*/
 
-
 /* ===================
   PREFERENCE THINGS 
 ==================== */
@@ -54,6 +53,7 @@ static BOOL gWAMChangelogShownThisLaunch = NO;
 static NSString *gWAMCurrentContactName = nil;
 static NSString *gWAMCurrentContactDisplayName = nil;
 static NSString *gWAMTriggerNameOverride = nil;
+static NSString *gWAMActiveChatName = nil;
 static BOOL gWAMChatIsActiveSurface = NO;
 static NSTimeInterval gWAMCacheSetAt = 0;
 static BOOL gWAMConvListViewVisible = NO;
@@ -163,7 +163,6 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     if (!view) return;
     Class cellCls = %c(CKConversationListCollectionViewConversationCell);
     if ([view isKindOfClass:%c(CKLabel)]) {
-        // Confirm this label is inside a conv list cell.
         UIView *p = view.superview;
         BOOL inCell = NO;
         while (p) {
@@ -196,7 +195,7 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     dispatch_once(&o, ^{
         s = [WAMHeartbeatTarget new];
         s->_link = [CADisplayLink displayLinkWithTarget:s selector:@selector(tick)];
-        s->_link.preferredFramesPerSecond = 60;  // 16ms cadence — halves the worst-case transition latency
+        s->_link.preferredFramesPerSecond = 60;
         [s->_link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     });
     return s;
@@ -230,6 +229,16 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
         conv = cv ? object_getIvar(foundCtrl, cv) : nil;
     }
     chatIsVisible = (conv != nil);
+
+    static void *prevConvPtr = NULL;
+    void *currentConvPtr = (__bridge void *)conv;
+    if (currentConvPtr != prevConvPtr) {
+        prevConvPtr = currentConvPtr;
+        if (conv && foundCtrl && [foundCtrl respondsToSelector:@selector(updateChatBackground)]) {
+            [foundCtrl performSelector:@selector(updateChatBackground)];
+        }
+    }
+
     Class listCls = %c(CKConversationListCollectionViewController);
     BOOL listInWindow = NO;
     if (listCls) {
@@ -255,11 +264,18 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
         }
     }
     BOOL topVCChanged = ![topVCClass isEqualToString:prevTopVCClass];
+    BOOL chatBecameTop = topVCChanged &&
+        [topVCClass isEqualToString:@"CKNavigationController"];
     if (listInWindow != prevListVisible || topVCChanged) {
         WAMLOG(@"[heartbeat] listVis %d→%d topVC '%@'→'%@' (chatVisible=%d conv=%p)",
                prevListVisible, listInWindow, prevTopVCClass ?: @"(init)", topVCClass, chatIsVisible, conv);
         prevListVisible = listInWindow;
         prevTopVCClass = [topVCClass copy];
+    }
+    if (chatBecameTop && conv && foundCtrl &&
+        [foundCtrl respondsToSelector:@selector(updateChatBackground)]) {
+        WAMLOG(@"[bg][chatEnter] firing updateChatBackground for conv=%p", conv);
+        [foundCtrl performSelector:@selector(updateChatBackground)];
     }
     gWAMConvListViewVisible = listInWindow;
     static BOOL prevChatVisible = NO;
@@ -468,7 +484,6 @@ static void setPerContactBlur(NSString *contactName, BOOL isDark, CGFloat blur) 
     if ([existing isKindOfClass:[NSDictionary class]]) {
         entry = [(NSDictionary *)existing mutableCopy];
     } else if ([existing isKindOfClass:[NSNumber class]]) {
-        // Migrate legacy single-value entry — preserve old value for the other mode.
         entry = [NSMutableDictionary dictionaryWithObjectsAndKeys:existing, @"light", existing, @"dark", nil];
     } else {
         entry = [NSMutableDictionary new];
@@ -642,16 +657,67 @@ static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *display
     }
 }
 
+static NSString *wamReadCurrentChatCanonicalName(void) {
+    Class messagesCtrlClass = %c(CKMessagesController);
+    if (!messagesCtrlClass) return nil;
+
+    NSArray<UIWindow *> *windows = nil;
+    if (@available(iOS 13.0, *)) {
+        NSMutableArray *ws = [NSMutableArray array];
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                [ws addObjectsFromArray:((UIWindowScene *)scene).windows];
+            }
+        }
+        windows = ws;
+    }
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (!windows.count) windows = [UIApplication sharedApplication].windows;
+#pragma clang diagnostic pop
+
+    UIViewController *messagesCtrl = nil;
+    for (UIWindow *w in windows) {
+        messagesCtrl = wamFindVCInHierarchy(w.rootViewController, messagesCtrlClass);
+        if (messagesCtrl) break;
+    }
+    if (!messagesCtrl) return nil;
+
+    Ivar cv = class_getInstanceVariable([messagesCtrl class], "_currentConversation");
+    id conv = cv ? object_getIvar(messagesCtrl, cv) : nil;
+    if (!conv) return nil;
+
+    NSString *name = nil;
+    Ivar ch = class_getInstanceVariable([conv class], "_chat");
+    id chat = ch ? object_getIvar(conv, ch) : nil;
+    if ([chat respondsToSelector:@selector(displayName)]) {
+        NSString *dn = [chat performSelector:@selector(displayName)];
+        if ([dn isKindOfClass:[NSString class]] && dn.length) name = dn;
+    }
+    if (!name.length) {
+        static const char *nameIvars[] = {"_name", "_displayName", "_groupName", NULL};
+        for (int i = 0; nameIvars[i]; i++) {
+            Ivar v = class_getInstanceVariable([conv class], nameIvars[i]);
+            if (!v) continue;
+            id val = object_getIvar(conv, v);
+            if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
+        }
+    }
+    name = [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return name.length ? name : nil;
+}
+
 static NSString *getActiveContactNameForBg(void) {
+    NSString *canonical = wamReadCurrentChatCanonicalName();
+    if (canonical.length) return canonical;
     if (gWAMTriggerNameOverride.length) return gWAMTriggerNameOverride;
-    return getCurrentContactName();
+    return gWAMActiveChatName;
 }
 
 static NSString *getPerContactImagePathForCurrentChat() {
     if (!isPerContactChatBgEnabled()) return nil;
     NSString *name = getActiveContactNameForBg();
     if (!name.length) return nil;
-    if (!perContactOverridesEnabled(name)) return nil;
     BOOL dark = isDarkMode();
     NSString *primary = getPerContactImagePath(name, dark);
     if (primary && [[NSFileManager defaultManager] fileExistsAtPath:primary]) return primary;
@@ -1005,22 +1071,74 @@ UIColor *getInputFieldBackgroundColor() {
 }
 
 static BOOL isAdvancedTintEnabled() {
-    if (chatHasPerContactOverride()) return YES;
     NSDictionary *prefs = loadPrefs();
     return prefs[@"isAdvancedTintEnabled"] ? [prefs[@"isAdvancedTintEnabled"] boolValue] : NO;
 }
 
-static UIColor *getAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
-    BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
-    if (!effective) return fallback;
+static UIColor *resolveAdvancedColorForKey(NSString *key, UIColor *fallback) {
+    NSString *name = getCurrentContactName();
+    if (name.length && perContactOverridesEnabled(name)) {
+        id pc = getPerContactOverride(name, key);
+        if (pc) {
+            UIColor *c = colorFromHex(pc);
+            if (c) return c;
+        }
+    }
+    if (isAdvancedTintEnabled()) {
+        id global = loadPrefs()[key];
+        if (global) {
+            UIColor *c = colorFromHex(global);
+            if (c) return c;
+        }
+    }
+    return fallback;
+}
+
+static BOOL isAdvancedValueExplicitlySet(NSString *lightKey, NSString *darkKey) {
     NSString *key = isDarkMode() ? darkKey : lightKey;
-    UIColor *color = colorFromHex(effectiveValueForKey(key));
-    return color ?: fallback;
+    NSString *name = getCurrentContactName();
+    if (name.length && perContactOverridesEnabled(name)) {
+        if (getPerContactOverride(name, key)) return YES;
+    }
+    if (isAdvancedTintEnabled() && loadPrefs()[key]) return YES;
+    return NO;
+}
+
+static BOOL wamIsReactionBalloonAncestor(UIView *view, int maxHops) {
+    Class A = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView");
+    Class B = NSClassFromString(@"CKAggregateAcknowledgementBalloonView");
+    UIView *p = view ? view.superview : nil;
+    int hops = 0;
+    while (p && hops < maxHops) {
+        if ((A && [p isKindOfClass:A]) || (B && [p isKindOfClass:B])) return YES;
+        p = p.superview;
+        hops++;
+    }
+    return NO;
+}
+
+static BOOL wamIsInsideReactionContext(UIView *view, int maxHops) {
+    Class A = NSClassFromString(@"CKAggregateAcknowledgmentBalloonView");
+    Class B = NSClassFromString(@"CKAggregateAcknowledgementBalloonView");
+    Class C = NSClassFromString(@"CKAggregateAcknowledgmentTranscriptCell");
+    Class D = NSClassFromString(@"CKAggregateAcknowledgementTranscriptCell");
+    UIView *p = view ? view.superview : nil;
+    int hops = 0;
+    while (p && hops < maxHops) {
+        if ((A && [p isKindOfClass:A]) || (B && [p isKindOfClass:B]) ||
+            (C && [p isKindOfClass:C]) || (D && [p isKindOfClass:D])) return YES;
+        p = p.superview;
+        hops++;
+    }
+    return NO;
+}
+
+static UIColor *getAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
+    NSString *key = isDarkMode() ? darkKey : lightKey;
+    return resolveAdvancedColorForKey(key, fallback);
 }
 
 static UIColor *getAdvancedTintColorForView(NSString *lightKey, NSString *darkKey, UIColor *fallback, UIView *view) {
-    BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
-    if (!effective) return fallback;
     BOOL dark = NO;
     if (@available(iOS 13.0, *)) {
         dark = view
@@ -1028,21 +1146,15 @@ static UIColor *getAdvancedTintColorForView(NSString *lightKey, NSString *darkKe
             : isDarkMode();
     }
     NSString *key = dark ? darkKey : lightKey;
-    UIColor *color = colorFromHex(effectiveValueForKey(key));
-    return color ?: fallback;
+    return resolveAdvancedColorForKey(key, fallback);
 }
 
 static UIColor *getChatAdvancedTintColor(NSString *lightKey, NSString *darkKey, UIColor *fallback) {
-    BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
-    if (!effective) return fallback;
     NSString *key = isDarkMode() ? darkKey : lightKey;
-    UIColor *color = colorFromHex(effectiveValueForKey(key));
-    return color ?: fallback;
+    return resolveAdvancedColorForKey(key, fallback);
 }
 
 static UIColor *getChatAdvancedTintColorForView(NSString *lightKey, NSString *darkKey, UIColor *fallback, UIView *view) {
-    BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
-    if (!effective) return fallback;
     BOOL dark = NO;
     if (@available(iOS 13.0, *)) {
         dark = view
@@ -1050,8 +1162,7 @@ static UIColor *getChatAdvancedTintColorForView(NSString *lightKey, NSString *da
             : isDarkMode();
     }
     NSString *key = dark ? darkKey : lightKey;
-    UIColor *color = colorFromHex(effectiveValueForKey(key));
-    return color ?: fallback;
+    return resolveAdvancedColorForKey(key, fallback);
 }
 
 static UIColor *getAdvancedUnreadDotColor() {
@@ -1059,20 +1170,6 @@ static UIColor *getAdvancedUnreadDotColor() {
 }
 
 static UIColor *getAdvancedSwitchTintColor() {
-    if (chatHasPerContactOverride()) {
-        NSString *swKey = isDarkMode() ? @"advancedSwitchTintColorDark" : @"advancedSwitchTintColor";
-        id rawSw = getPerContactOverride(gWAMCurrentContactName, swKey);
-        if (rawSw) {
-            UIColor *c = colorFromHex(rawSw);
-            if (c) return c;
-        }
-        NSString *stKey = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
-        id rawSt = getPerContactOverride(gWAMCurrentContactName, stKey);
-        if (rawSt) {
-            UIColor *c = colorFromHex(rawSt);
-            if (c) return c;
-        }
-    }
     return getAdvancedTintColor(@"advancedSwitchTintColor", @"advancedSwitchTintColorDark", getSystemTintColor());
 }
 
@@ -1093,13 +1190,8 @@ static UIColor *getAdvancedReactionGlyphColor() {
 }
 
 static UIColor *getGlyphTintColor(void) {
-    NSString *key = isDarkMode() ? @"advancedReactionGlyphColorDark" : @"advancedReactionGlyphColor";
-    BOOL effective = isAdvancedTintEnabled() || chatHasPerContactOverride();
-    id raw = effectiveValueForKey(key);
-    if (effective && raw) {
-        UIColor *explicit = colorFromHex(raw);
-        if (explicit) return explicit;
-    }
+    UIColor *explicit = getChatAdvancedTintColor(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark", nil);
+    if (explicit) return explicit;
 
     UIColor *base = getSystemTintColor();
     if (!base) return [UIColor colorWithWhite:0.85 alpha:1.0];
@@ -2206,7 +2298,14 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 - (void)removeTapped {
     if (!self.contactName.length) return;
     NSFileManager *fm = [NSFileManager defaultManager];
-    [fm removeItemAtPath:getPerContactImagePath(self.contactName, _editingDarkMode) error:nil];
+    NSMutableSet *aliasNames = [NSMutableSet setWithObject:self.contactName];
+    NSString *visible = gWAMCurrentContactName;
+    if (visible.length) [aliasNames addObject:visible];
+    NSString *displayed = gWAMCurrentContactDisplayName;
+    if (displayed.length) [aliasNames addObject:displayed];
+    for (NSString *aliasName in aliasNames) {
+        [fm removeItemAtPath:getPerContactImagePath(aliasName, _editingDarkMode) error:nil];
+    }
     [self refreshBackgroundTab];
     if (self.onChanged) self.onChanged();
 }
@@ -2229,10 +2328,28 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
         if (!img || !name.length) return;
         NSData *data = UIImageJPEGRepresentation(img, 0.9);
         if (!data) return;
-        NSString *path = getPerContactImagePath(name, dark);
-        NSString *dir = [path stringByDeletingLastPathComponent];
-        [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-        [data writeToFile:path atomically:YES];
+
+        NSMutableSet *aliasNames = [NSMutableSet setWithObject:name];
+        NSString *visible = gWAMCurrentContactName;
+        if (visible.length && ![visible isEqualToString:name]) {
+            [aliasNames addObject:visible];
+        }
+        NSString *displayed = gWAMCurrentContactDisplayName;
+        if (displayed.length && ![aliasNames containsObject:displayed]) {
+            [aliasNames addObject:displayed];
+        }
+
+        for (NSString *aliasName in aliasNames) {
+            NSString *path = getPerContactImagePath(aliasName, dark);
+            NSString *dir = [path stringByDeletingLastPathComponent];
+            [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+            [data writeToFile:path atomically:YES];
+            if (!perContactOverridesEnabled(aliasName)) {
+                setPerContactOverridesEnabled(aliasName, YES);
+            }
+            WAMLOG(@"[bg][picker] wrote name='%@' dark=%d path='%@' exists=%d",
+                   aliasName, dark, path, [[NSFileManager defaultManager] fileExistsAtPath:path]);
+        }
         [weakSelf refreshBackgroundTab];
         if (weakSelf.onChanged) weakSelf.onChanged();
     }];
@@ -2971,6 +3088,11 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
             }
             if ([p isKindOfClass:[UINavigationBar class]]) {
                 if (wamNavBarShouldUseGlobals(p)) {
+                    NSString *navKey = isDarkMode() ? @"advancedNavButtonColorDark" : @"advancedNavButtonColor";
+                    if (isAdvancedTintEnabled()) {
+                        UIColor *navAdvanced = colorFromHex(loadPrefs()[navKey]);
+                        if (navAdvanced) return navAdvanced;
+                    }
                     NSDictionary *prefs = loadPrefs();
                     NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
                     UIColor *globalTint = colorFromHex(prefs[key]);
@@ -2981,6 +3103,11 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
             if ([p respondsToSelector:@selector(_viewControllerForAncestor)]) {
                 UIViewController *vc = [p _viewControllerForAncestor];
                 if (vc && [vc isKindOfClass:%c(CKConversationListCollectionViewController)]) {
+                    NSString *navKey = isDarkMode() ? @"advancedNavButtonColorDark" : @"advancedNavButtonColor";
+                    if (isAdvancedTintEnabled()) {
+                        UIColor *navAdvanced = colorFromHex(loadPrefs()[navKey]);
+                        if (navAdvanced) return navAdvanced;
+                    }
                     NSDictionary *prefs = loadPrefs();
                     NSString *key = isDarkMode() ? @"systemTintColorDark" : @"systemTintColor";
                     UIColor *globalTint = colorFromHex(prefs[key]);
@@ -2994,7 +3121,12 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     }
 
     UIColor *customTint = getSystemTintColor();
-    if (!customTint) return %orig;
+    if (!customTint &&
+        !isAdvancedValueExplicitlySet(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark") &&
+        !isAdvancedValueExplicitlySet(@"advancedContactActionColor", @"advancedContactActionColorDark") &&
+        !isAdvancedValueExplicitlySet(@"advancedNavButtonColor", @"advancedNavButtonColorDark")) {
+        return %orig;
+    }
 
     if ([self isKindOfClass:[UIImageView class]] && self.tag == 88771) return %orig;
 
@@ -3035,63 +3167,51 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         levels++;
     }
 
-    if (!isCustomBubbleColorsEnabled()) {
+    if (!isCustomBubbleColorsEnabled() &&
+        !isAdvancedValueExplicitlySet(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark") &&
+        !isAdvancedValueExplicitlySet(@"advancedReactionHighlightColor", @"advancedReactionHighlightColorDark") &&
+        !isAdvancedValueExplicitlySet(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark")) {
+        if (wamIsReactionBalloonAncestor(self, 5)) return %orig;
+    }
+
+    UIColor *balloonColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
+    if (balloonColor && wamIsReactionBalloonAncestor(self, 5)) {
+        return balloonColor;
+    }
+
+    UIColor *contactActionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
+    if (contactActionColor) {
         UIView *p = self.superview;
         int l = 0;
-        while (p && l < 5) {
-            if ([p isKindOfClass:%c(CKAggregateAcknowledgmentBalloonView)]) return %orig;
+        while (p && l < 10) {
+            if ([p isKindOfClass:%c(CNActionView)]) {
+                return contactActionColor;
+            }
             p = p.superview;
             l++;
         }
     }
 
-    if (isAdvancedTintEnabled()) {
-        UIColor *balloonColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
-        if (balloonColor) {
-            UIView *p = self.superview;
-            int l = 0;
-            while (p && l < 5) {
-                if ([p isKindOfClass:%c(CKAggregateAcknowledgmentBalloonView)]) {
-                    return balloonColor;
-                }
-                p = p.superview;
-                l++;
+    UIColor *navButtonColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self);
+    if (navButtonColor) {
+        UIView *p = self.superview;
+        int l = 0;
+        while (p && l < 12) {
+            if ([p isKindOfClass:[UINavigationBar class]] ||
+                [p isKindOfClass:%c(UINavigationButton)] ||
+                [p isKindOfClass:%c(_UIButtonBarButton)] ||
+                [p isKindOfClass:%c(CNActionView)] ||
+                [NSStringFromClass([p class]) containsString:@"BarButton"] ||
+                [NSStringFromClass([p class]) containsString:@"NavigationButton"]) {
+                return navButtonColor;
             }
-        }
-
-        UIColor *contactActionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", nil, self);
-        if (contactActionColor) {
-            UIView *p = self.superview;
-            int l = 0;
-            while (p && l < 10) {
-                if ([p isKindOfClass:%c(CNActionView)]) {
-                    return contactActionColor;
-                }
-                p = p.superview;
-                l++;
-            }
-        }
-
-        UIColor *navButtonColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self);
-        if (navButtonColor) {
-            UIView *p = self.superview;
-            int l = 0;
-            while (p && l < 12) {
-                if ([p isKindOfClass:[UINavigationBar class]] ||
-                    [p isKindOfClass:%c(UINavigationButton)] ||
-                    [p isKindOfClass:%c(_UIButtonBarButton)] ||
-                    [p isKindOfClass:%c(CNActionView)] ||
-                    [NSStringFromClass([p class]) containsString:@"BarButton"] ||
-                    [NSStringFromClass([p class]) containsString:@"NavigationButton"]) {
-                    return navButtonColor;
-                }
-                p = p.superview;
-                l++;
-            }
+            p = p.superview;
+            l++;
         }
     }
 
-    return customTint;
+    if (customTint) return customTint;
+    return %orig;
 }
 
 - (void)didMoveToWindow {
@@ -3384,7 +3504,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         }
         for (UIView *sub in view.subviews) [queue addObject:sub];
     }
-    NSString *name = best.text;
+    NSString *name = [best.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (!name.length) return;
     if ([name isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [name copy];
@@ -3405,6 +3525,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         if (messagesCtrl) break;
     }
     if (messagesCtrl && [messagesCtrl respondsToSelector:@selector(updateChatBackground)]) {
+        gWAMActiveChatName = [name copy];
         gWAMTriggerNameOverride = name;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
@@ -4238,22 +4359,25 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     %orig;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return;
-    UILabel *best = nil;
-    CGFloat bestSize = 0;
-    NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
-    while (queue.count > 0) {
-        UIView *view = queue[0];
-        [queue removeObjectAtIndex:0];
-        if ([view isKindOfClass:[UILabel class]] && ![view isKindOfClass:%c(CKDateLabel)]) {
-            UILabel *label = (UILabel *)view;
-            if (label.text.length) {
-                CGFloat sz = label.font.pointSize;
-                if (sz > bestSize) { bestSize = sz; best = label; }
+    NSString *captured = nil;
+    {
+        UILabel *best = nil;
+        CGFloat bestSize = 0;
+        NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
+        while (queue.count > 0) {
+            UIView *view = queue[0];
+            [queue removeObjectAtIndex:0];
+            if ([view isKindOfClass:[UILabel class]] && ![view isKindOfClass:%c(CKDateLabel)]) {
+                UILabel *label = (UILabel *)view;
+                if (label.text.length) {
+                    CGFloat sz = label.font.pointSize;
+                    if (sz > bestSize) { bestSize = sz; best = label; }
+                }
             }
+            for (UIView *sub in view.subviews) [queue addObject:sub];
         }
-        for (UIView *sub in view.subviews) [queue addObject:sub];
+        captured = [best.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     }
-    NSString *captured = best.text;
     if (!captured.length) return;
     if ([captured isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [captured copy];
@@ -4280,6 +4404,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         if (messagesCtrl) break;
     }
     if (messagesCtrl) {
+        if (captured.length) gWAMActiveChatName = [captured copy];
         gWAMTriggerNameOverride = captured;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
@@ -4434,14 +4559,45 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 %new
 -(void)handleAppDidBecomeActiveForBg {
     if (!isTweakEnabled()) return;
-    [self updateChatBackground];
+    [self wamRefreshChatBackgroundWithSelfContext];
 }
 
+%new
+- (void)wamRefreshChatBackgroundWithSelfContext {
+    NSString *name = nil;
+    @try {
+        id conv = [self valueForKey:@"_currentConversation"];
+        if (conv) {
+            id chat = nil;
+            @try { chat = [conv valueForKey:@"_chat"]; } @catch (NSException *e) {}
+            if ([chat respondsToSelector:@selector(displayName)]) {
+                NSString *dn = [chat performSelector:@selector(displayName)];
+                if ([dn isKindOfClass:[NSString class]] && dn.length) name = dn;
+            }
+            if (!name.length) {
+                static const char *nameIvars[] = {"_name", "_displayName", "_groupName", NULL};
+                for (int i = 0; nameIvars[i]; i++) {
+                    Ivar v = class_getInstanceVariable([conv class], nameIvars[i]);
+                    if (!v) continue;
+                    id val = object_getIvar(conv, v);
+                    if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
+                }
+            }
+        }
+    } @catch (NSException *e) {}
+
+    if (!name.length) name = gWAMActiveChatName;
+
+    NSString *prev = gWAMTriggerNameOverride;
+    if (name.length) gWAMTriggerNameOverride = name;
+    [self updateChatBackground];
+    gWAMTriggerNameOverride = prev;
+}
 
 %new
 -(void)handleChatPrefsChanged {
     refreshPrefs();
-    [self updateChatBackground];
+    [self wamRefreshChatBackgroundWithSelfContext];
 
     id transcriptController = nil;
     @try { transcriptController = [self valueForKey:@"_transcriptController"]; } @catch (NSException *e) {}
@@ -4477,6 +4633,8 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 -(void)updateChatBackground {
     static const char kBgStateKey = 0;
 
+    refreshPrefs();
+
     NSString *desiredState = nil;
     BOOL useColor = isChatColorBgEnabled();
     NSString *desiredPath = nil;
@@ -4495,31 +4653,34 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     }
 
     NSString *currentState = objc_getAssociatedObject(self.view, &kBgStateKey);
+    UIView *existingBg = nil;
+    for (UIView *sub in self.view.subviews) {
+        if (sub.tag == 4321) { existingBg = sub; break; }
+    }
 
-    if (!desiredState && !currentState) {
+    if (!desiredState && !currentState && !existingBg) {
         return;
     }
 
-    if (desiredState && [desiredState isEqualToString:currentState]) {
-        return;
-    }
-
-    if (!desiredState) {
-        if (!isChatImageBgEnabled() && !isPerContactChatBgEnabled() && !isChatColorBgEnabled()) {
-            for (UIView *sub in [self.view.subviews copy]) {
-                if (sub.tag == 4321) [sub removeFromSuperview];
-            }
-            objc_setAssociatedObject(self.view, &kBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        } else {
+    if (desiredState && [desiredState isEqualToString:currentState] && existingBg) {
+        if (existingBg != [self.view.subviews firstObject]) {
+            [self.view sendSubviewToBack:existingBg];
         }
         return;
     }
 
-    for (UIView *sub in [self.view.subviews copy]) {
-        if (sub.tag == 4321) [sub removeFromSuperview];
+    if (!desiredState) {
+        for (UIView *sub in [self.view.subviews copy]) {
+            if (sub.tag == 4321) [sub removeFromSuperview];
+        }
+        objc_setAssociatedObject(self.view, &kBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        return;
     }
 
     if (useColor) {
+        for (UIView *sub in [self.view.subviews copy]) {
+            if (sub.tag == 4321) [sub removeFromSuperview];
+        }
         UIView *colorView = [[UIView alloc] initWithFrame:self.view.bounds];
         colorView.backgroundColor = getChatBackgroundColor();
         colorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -4531,12 +4692,16 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     UIImage *chatBgImage = loadImageUncached(desiredPath);
     if (!chatBgImage) {
-        WAMLOG(@"  loaded=NO path=%@", desiredPath);
+        WAMLOG(@"[bg][update] load failed path=%@ — keeping existing bg", desiredPath);
         return;
     }
 
     CGFloat blurAmount = getEffectiveChatBgBlur();
     if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
+
+    for (UIView *sub in [self.view.subviews copy]) {
+        if (sub.tag == 4321) [sub removeFromSuperview];
+    }
 
     UIImageView *imageView = [[UIImageView alloc] initWithFrame:self.view.bounds];
     imageView.image = chatBgImage;
@@ -4565,7 +4730,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
             if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
             refreshPrefs();
-            [self updateChatBackground];
+            [self wamRefreshChatBackgroundWithSelfContext];
         }
     }
 }
@@ -4579,11 +4744,13 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 - (void)setCurrentConversation:(id)conversation {
     %orig;
+    if (!conversation) gWAMActiveChatName = nil;
     [self wamHandleConversationChanged:conversation];
 }
 
 - (void)_setCurrentConversation:(id)conversation {
     %orig;
+    if (!conversation) gWAMActiveChatName = nil;
     [self wamHandleConversationChanged:conversation];
 }
 
@@ -4618,6 +4785,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (cid.length) wamReconcileAliasForChat(cid, name);
     gWAMCurrentContactName = [name copy];
     gWAMCurrentContactDisplayName = [name copy];
+    gWAMActiveChatName = [name copy];
     gWAMTriggerNameOverride = name;
     [self updateChatBackground];
     gWAMTriggerNameOverride = nil;
@@ -4738,7 +4906,7 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (!isTweakEnabled()) return;
     UINavigationController *nav = self.navigationController;
     if (nav && ![nav.viewControllers containsObject:self]) return;
-    [self updateChatBackground];
+    [self wamRefreshChatBackgroundWithSelfContext];
     NSTimeInterval delay;
     if (attempt < 6)       delay = 0.05;
     else if (attempt < 21) delay = 0.2;
@@ -4758,11 +4926,22 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
+    if (!isTweakEnabled()) return;
     if (self.frame.size.width <= 0 || self.frame.size.height <= 0) return;
 
-    BOOL isReaction = [self.superview isKindOfClass:objc_getClass("CKAggregateAcknowledgmentBalloonView")];
-    if (isReaction) { self.hidden = YES; return; }
+    BOOL isReaction = wamIsInsideReactionContext(self, 8);
+    if (isReaction) {
+        UIColor *reactionColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
+        if (reactionColor) {
+            self.hidden = NO;
+            [self setColors:@[reactionColor, reactionColor]];
+        } else {
+            self.hidden = YES;
+        }
+        return;
+    }
+
+    if (!isCustomBubbleColorsEnabled()) return;
 
     UIColor *bubbleColor = getSentBubbleColor();
     UIView *parent = self.superview;
@@ -4781,10 +4960,21 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 }
 
 - (void)setColors:(NSArray *)colors {
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) { %orig; return; }
+    if (!isTweakEnabled()) { %orig; return; }
 
-    BOOL isReaction = [self.superview isKindOfClass:objc_getClass("CKAggregateAcknowledgmentBalloonView")];
-    if (isReaction) { self.hidden = YES; return; }
+    BOOL isReaction = wamIsInsideReactionContext(self, 8);
+    if (isReaction) {
+        UIColor *reactionColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
+        if (reactionColor) {
+            self.hidden = NO;
+            %orig(@[reactionColor, reactionColor]);
+        } else {
+            self.hidden = YES;
+        }
+        return;
+    }
+
+    if (!isCustomBubbleColorsEnabled()) { %orig; return; }
 
     UIColor *bubbleColor = getSentBubbleColor();
     UIView *parent = self.superview;
@@ -4807,12 +4997,19 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 %hook CKBalloonImageView
 
 - (void)setImage:(UIImage *)image {
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
+    if (!isTweakEnabled() || !image) { %orig; return; }
+
+    BOOL isInsideReaction = wamIsReactionBalloonAncestor(self, 6);
+    BOOL hasReactionBalloonOverride = isAdvancedValueExplicitlySet(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark");
+    if (!isCustomBubbleColorsEnabled() && !(isInsideReaction && hasReactionBalloonOverride)) { %orig; return; }
+
     if ([self isKindOfClass:%c(CKColoredBalloonView)]) {
         CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
         UIColor *targetColor = nil;
         BOOL applyReceivedInsets = NO;
-        if (coloredSelf.color == -1) {
+        if (isInsideReaction && hasReactionBalloonOverride) {
+            targetColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
+        } else if (coloredSelf.color == -1) {
             targetColor = getReceivedBubbleColor();
             applyReceivedInsets = YES;
         } else if (coloredSelf.color == 1) {
@@ -6155,11 +6352,12 @@ static const char kWAMOriginalImageKey = 0;
 
 %new
 - (void)wamHeaderCustomizeTapped {
-    NSString *name = gWAMCurrentContactName;
+    NSString *name = wamReadCurrentChatCanonicalName();
+    if (!name.length) name = gWAMCurrentContactName;
     if (!name.length) return;
     WAMPerContactSettings *vc = [WAMPerContactSettings new];
     vc.contactName = name;
-    vc.displayName = gWAMCurrentContactDisplayName;
+    vc.displayName = name;
     vc.onChanged = ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
     };
@@ -6209,6 +6407,7 @@ static const char kWAMOriginalImageKey = 0;
         return;
     }
 
+    refreshPrefs();
     UIImage *chatBgImage = loadImageUncached(getChatImagePath());
 
     if (isChatColorBgEnabled()) {
@@ -7595,20 +7794,22 @@ static const char kWAMOriginalImageKey = 0;
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    if (isCustomBubbleColorsEnabled()) {
-        UIColor *customTint = getAdvancedReactionGlyphColor();
-        if (customTint) {
-            self.tintColor = customTint;
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
-            }
+    BOOL hasGlyphOverride = isAdvancedValueExplicitlySet(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark");
+    if (!isCustomBubbleColorsEnabled() && !hasGlyphOverride) return;
+    UIColor *customTint = getAdvancedReactionGlyphColor();
+    if (customTint) {
+        self.tintColor = customTint;
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
         }
-        [self applyGlyphTintRecursively:self];
     }
+    [self applyGlyphTintRecursively:self];
 }
 
 - (void)setTintColor:(UIColor *)color {
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) { %orig; return; }
+    if (!isTweakEnabled()) { %orig; return; }
+    BOOL hasGlyphOverride = isAdvancedValueExplicitlySet(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark");
+    if (!isCustomBubbleColorsEnabled() && !hasGlyphOverride) { %orig; return; }
     UIColor *customTint = getAdvancedReactionGlyphColor();
     if (customTint) {
         %orig(customTint);
@@ -7624,16 +7825,16 @@ static const char kWAMOriginalImageKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    if (isCustomBubbleColorsEnabled()) {
-        UIColor *customTint = getAdvancedReactionGlyphColor();
-        if (customTint) {
-            self.tintColor = customTint;
-            for (UIView *subview in self.subviews) {
-                if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
-            }
+    BOOL hasGlyphOverride = isAdvancedValueExplicitlySet(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark");
+    if (!isCustomBubbleColorsEnabled() && !hasGlyphOverride) return;
+    UIColor *customTint = getAdvancedReactionGlyphColor();
+    if (customTint) {
+        self.tintColor = customTint;
+        for (UIView *subview in self.subviews) {
+            if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = customTint;
         }
-        [self applyGlyphTintRecursively:self];
     }
+    [self applyGlyphTintRecursively:self];
 }
 
 %new
@@ -7905,7 +8106,9 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 %hook CKAcknowledgmentGlyphImageView
 
 - (void)setImage:(UIImage *)image {
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !image) { %orig; return; }
+    if (!isTweakEnabled() || !image) { %orig; return; }
+    BOOL hasGlyphOverride = isAdvancedValueExplicitlySet(@"advancedReactionGlyphColor", @"advancedReactionGlyphColorDark");
+    if (!isCustomBubbleColorsEnabled() && !hasGlyphOverride) { %orig; return; }
 
     UIColor *glyphTint = getGlyphTintColor();
 
@@ -8148,12 +8351,7 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     UIColor *accent = getAdvancedSearchFieldColor();
     if (!accent) return;
 
-    BOOL useFlat = NO;
-    if (isAdvancedTintEnabled()) {
-        NSDictionary *prefs = loadPrefs();
-        NSString *key = isDarkMode() ? @"advancedSearchFieldColorDark" : @"advancedSearchFieldColor";
-        useFlat = (prefs[key] != nil);
-    }
+    BOOL useFlat = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark");
 
     if (!useFlat) {
         CGFloat h, s, b, a;
@@ -8372,22 +8570,25 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     %orig;
     if (!isTweakEnabled() || !isPerContactChatBgEnabled()) return;
-    UILabel *best = nil;
-    CGFloat bestSize = 0;
-    NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
-    while (queue.count > 0) {
-        UIView *view = queue[0];
-        [queue removeObjectAtIndex:0];
-        if ([view isKindOfClass:[UILabel class]] && ![view isKindOfClass:%c(CKDateLabel)]) {
-            UILabel *label = (UILabel *)view;
-            if (label.text.length) {
-                CGFloat sz = label.font.pointSize;
-                if (sz > bestSize) { bestSize = sz; best = label; }
+    NSString *captured = nil;
+    {
+        UILabel *best = nil;
+        CGFloat bestSize = 0;
+        NSMutableArray *queue = [NSMutableArray arrayWithObject:(UIView *)self];
+        while (queue.count > 0) {
+            UIView *view = queue[0];
+            [queue removeObjectAtIndex:0];
+            if ([view isKindOfClass:[UILabel class]] && ![view isKindOfClass:%c(CKDateLabel)]) {
+                UILabel *label = (UILabel *)view;
+                if (label.text.length) {
+                    CGFloat sz = label.font.pointSize;
+                    if (sz > bestSize) { bestSize = sz; best = label; }
+                }
             }
+            for (UIView *sub in view.subviews) [queue addObject:sub];
         }
-        for (UIView *sub in view.subviews) [queue addObject:sub];
+        captured = [best.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     }
-    NSString *captured = best.text;
     if (!captured.length) return;
     if ([captured isEqualToString:gWAMCurrentContactName]) return;
     gWAMCurrentContactName = [captured copy];
@@ -8414,6 +8615,7 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         if (messagesCtrl) break;
     }
     if (messagesCtrl) {
+        if (captured.length) gWAMActiveChatName = [captured copy];
         gWAMTriggerNameOverride = captured;
         [messagesCtrl performSelector:@selector(updateChatBackground)];
         gWAMTriggerNameOverride = nil;
@@ -8529,11 +8731,21 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
     %orig;
     if (!isTweakEnabled() || !self.superview) return;
 
-    UIImage *chatBgImage = loadImageUncached(getChatImagePath());
+    refreshPrefs();
+    NSString *resolvedPath = getChatImagePath();
+    NSString *resolvedName = getActiveContactNameForBg();
+    BOOL pathExists = resolvedPath && [[NSFileManager defaultManager] fileExistsAtPath:resolvedPath];
+    BOOL globalImageOn = isChatImageBgEnabled();
+    BOOL perContactOn = isPerContactChatBgEnabled();
+    BOOL shouldShow = shouldShowAnyChatBgImage();
+    UIImage *chatBgImage = loadImageUncached(resolvedPath);
+    WAMLOG(@"[bg][details] name='%@' path='%@' exists=%d globalOn=%d perContactOn=%d shouldShow=%d loaded=%d trigger='%@' active='%@'",
+           resolvedName, resolvedPath, pathExists, globalImageOn, perContactOn, shouldShow,
+           chatBgImage != nil, gWAMTriggerNameOverride, gWAMActiveChatName);
 
     if (isChatColorBgEnabled()) {
         self.backgroundColor = getChatBackgroundColor();
-    } else if (chatBgImage && shouldShowAnyChatBgImage()) {
+    } else if (chatBgImage && shouldShow) {
         CGFloat blurAmount = getEffectiveChatBgBlur();
         if (blurAmount > 0) chatBgImage = blurImage(chatBgImage, blurAmount);
 
@@ -8548,11 +8760,14 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
         imageView.image = chatBgImage;
         imageView.contentMode = UIViewContentModeScaleAspectFill;
         imageView.clipsToBounds = YES;
+        WAMLOG(@"[bg][details] installed image into superview");
         imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         imageView.userInteractionEnabled = NO;
         [self.superview insertSubview:imageView atIndex:0];
         self.backgroundColor = [UIColor clearColor];
     } else {
+        WAMLOG(@"[bg][details] SKIP install — chatBgImage=%d shouldShow=%d isChatColorBgEnabled=%d",
+               chatBgImage != nil, shouldShow, isChatColorBgEnabled());
         %orig;
     }
 
@@ -8633,8 +8848,32 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 %new
 - (void)applyAdvancedTintToContactLabels {
     UIColor *actionColor = getAdvancedTintColorForView(@"advancedContactActionColor", @"advancedContactActionColorDark", getSystemTintColor(), self);
-    if (!actionColor) return;
-    [self walkViewForTintLabels:self color:actionColor];
+    if (actionColor) [self walkViewForTintLabels:self color:actionColor];
+
+    UIColor *labelColor = getAdvancedTableLabelColor();
+    if (labelColor) [self wamWalkUserViewLabels:self color:labelColor];
+}
+
+%new
+- (void)wamWalkUserViewLabels:(UIView *)view color:(UIColor *)color {
+    NSString *className = NSStringFromClass([view class]);
+    if ([className containsString:@"Keyboard"]) return;
+
+    if ([view isKindOfClass:[UILabel class]]) {
+        UILabel *label = (UILabel *)view;
+        NSString *text = label.text;
+        BOOL isSectionHeader = (text.length > 1 &&
+                                [text isEqualToString:[text uppercaseString]] &&
+                                label.font.pointSize <= 14);
+        if (isSectionHeader) {
+            CGFloat r, g, b, a;
+            if (!label.textColor || ![label.textColor getRed:&r green:&g blue:&b alpha:&a] ||
+                !(r > 0.7 && g < 0.3 && b < 0.3)) {
+                label.textColor = color;
+            }
+        }
+    }
+    for (UIView *sub in view.subviews) [self wamWalkUserViewLabels:sub color:color];
 }
 
 %new
@@ -8696,7 +8935,7 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 - (void)didMoveToSuperview {
     %orig;
     if (!isTweakEnabled()) return;
-    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return; // ← add this
+    if (!isChatColorBgEnabled() && !isChatImageBgEnabled()) return;
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 5) {

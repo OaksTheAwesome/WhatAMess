@@ -1,0 +1,10 @@
+WhatAMess 1.3 Changelog
+
+New Features
+- Per-Contact Overrides: Customize chats based on the user that you're chatting with.
+
+Bug Fixes
+- Fixed all bugs that arose with Per-Contact Overrides
+- Fixed issues with Advanced tint colors not taking effect unless a global variable or specific global toggle was enabled. Enabling advanced tint colors and setting a color will now apply a color to that option regardless of what is enabled, as long as Advanced Tint Colors IS enabled.
+- Fixed an issue where the call/video/mail/info cells would lose their tinting upon entering another window.
+- Fixed an issue where some users couldn't export/import a preset, as zip and unzip weren't added as a dependency. (Oopsies)

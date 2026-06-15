@@ -21,6 +21,7 @@
 -(void)wamHandleConversationChanged:(id)conversation;
 -(void)wamRetryBgRefresh:(int)attempt;
 -(void)wamClearChatAndForceRefresh;
+-(void)wamRefreshChatBackgroundWithSelfContext;
 @end
 
 @interface _UIBarBackground : UIView
@@ -289,6 +290,7 @@
 @interface CNContactView : UIView
 - (void)applyAdvancedTintToContactLabels;
 - (void)walkViewForTintLabels:(UIView *)view color:(UIColor *)color;
+- (void)wamWalkUserViewLabels:(UIView *)view color:(UIColor *)color;
 @end
 
 @interface UITableViewWrapperView : UIView

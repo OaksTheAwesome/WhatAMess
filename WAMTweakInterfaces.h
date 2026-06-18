@@ -122,6 +122,7 @@
 -(void)handleButtonPrefsChanged;
 -(void)handleButtonResumeActive;
 -(void)applyColorsDirectly;
+-(void)wamApplyEntryButtonColors;
 @end
 
 @interface CKDetailsTableView : UITableView
@@ -241,6 +242,8 @@
 @end
 
 @interface UINavigationButton : UIView
+- (void)wamApplyNavButtonTint;
+- (void)wamHandleNavButtonPrefsChanged;
 @end
 
 @interface _UINavigationBarLargeTitleView : UIView
@@ -276,6 +279,8 @@
 @end
 
 @interface CKAvatarTitleCollectionReusableView : UIView
+- (void)wamApplyTitleColor;
+- (void)wamHandleAvatarTitlePrefsChanged;
 @end
 
 @interface CKMessageAcknowledgmentPickerBarView : UIView
@@ -331,7 +336,14 @@
 -(void)applyContactCellBlur;
 @end
 
+@interface UISwitch (WAMTweakAdditions)
+- (void)wamApplySwitchTint;
+- (void)wamHandleSwitchPrefsChanged;
+@end
+
 @interface CKNavigationBarCanvasView : UIView
+- (void)wamApplyNavCanvasButtonTint:(UIView *)view;
+- (void)wamHandleNavCanvasPrefsChanged;
 @end
 
 @interface CKPhotosSearchResultsModeHeaderReusableView : UIView

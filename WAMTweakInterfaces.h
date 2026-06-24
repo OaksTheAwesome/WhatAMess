@@ -126,6 +126,7 @@
 @end
 
 @interface CKDetailsTableView : UITableView
+-(NSInteger)wamRecolorTableLabelsInView:(UIView *)view;
 -(void)updateDetailsBackground;
 -(void)applyDetailsNavTitleColor;
 -(void)wamSwizzleHeightDelegate:(id)delegate;
@@ -179,6 +180,8 @@
 @end
 
 @interface UITableViewLabel : UILabel
+- (void)wamApplyTableLabelColor;
+- (void)wamHandleTableLabelPrefsChanged;
 @end
 
 @interface CKQuickActionSaveButton : UIView
@@ -272,6 +275,7 @@
 
 @interface CKDetailsSearchResultsTitleHeaderCell : UIView
 -(void)applyHeaderStyle;
+-(void)wamHandleHeaderPrefsChanged;
 @end
 
 @interface CKSearchResultsTitleHeaderCell : UIView

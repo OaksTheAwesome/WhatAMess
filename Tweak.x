@@ -1161,7 +1161,8 @@ BOOL isInputFieldCustomizationEnabled() {
 }
 
 BOOL isInputFieldBlurEnabled() {
-    if (chatHasPerContactOverride()) return YES;
+    // Per-contact has its own blur toggle that defaults to the global value (resolved
+    // via effectiveValueForKey inside readModeBoolWithFallback) rather than forcing on.
     return readModeBoolWithFallback(@"isInputFieldBlurEnabled", @"isInputFieldBlurEnabledDark");
 }
 
@@ -2737,6 +2738,7 @@ static UIColor *lightenedTint(UIColor *c, CGFloat amount) {
 static const void *kWAMRowKeyAssocKey = &kWAMRowKeyAssocKey;
 static const void *kWAMRowTypeAssocKey = &kWAMRowTypeAssocKey;
 static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
+static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
 - (NSString *)wamKeyForSpec:(NSDictionary *)spec {
     NSString *k = _editingDarkMode ? spec[@"dark"] : spec[@"light"];
@@ -2810,6 +2812,16 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
 
     NSString *key = [self wamKeyForSpec:spec];
     NSString *type = spec[@"type"];
+
+    // A row may be gated by another (boolean) row in the same card — e.g. "Blur Style"
+    // is only editable while the "Blur" toggle is on. Resolve the dependency for the
+    // mode currently being edited and fold it into `enabled`.
+    NSString *depKey = _editingDarkMode ? spec[@"dependsOnDark"] : spec[@"dependsOnLight"];
+    if (!depKey.length) depKey = spec[@"dependsOnLight"];
+    if (depKey.length) {
+        id depVal = [self wamReadValueForKey:depKey];
+        if (!(depVal ? [depVal boolValue] : NO)) enabled = NO;
+    }
 
     UILabel *label = [UILabel new];
     label.text = spec[@"label"];
@@ -2911,6 +2923,9 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
         valSwitch.alpha = enabled ? 1.0 : 0.5;
         [valSwitch addTarget:self action:@selector(wamValueSwitchToggled:) forControlEvents:UIControlEventValueChanged];
         objc_setAssociatedObject(valSwitch, kWAMRowKeyAssocKey, key, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        if ([spec[@"reloadsOnToggle"] boolValue]) {
+            objc_setAssociatedObject(valSwitch, kWAMRowReloadsAssocKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
         valSwitch.translatesAutoresizingMaskIntoConstraints = NO;
         [row addSubview:valSwitch];
         trailing = valSwitch;
@@ -3006,6 +3021,11 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
     if (!key.length) return;
     setPerContactOverride(self.contactName, key, @(sender.on));
     if (self.onChanged) self.onChanged();
+    // If this toggle gates other rows (e.g. Blur → Blur Style), rebuild so they
+    // re-evaluate their enabled state.
+    if ([objc_getAssociatedObject(sender, kWAMRowReloadsAssocKey) boolValue]) {
+        [self loadTab];
+    }
 }
 
 - (void)wamSwatchTapped:(UIButton *)sender {
@@ -3106,7 +3126,10 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
                @{@"label": @"Placeholder",      @"light": @"placeholderTextColor",      @"dark": @"placeholderTextColorDark",      @"type": @"color"},
                @{@"label": @"Placeholder Text", @"light": @"placeholderText",           @"dark": @"placeholderTextDark",           @"type": @"text",
                  @"placeholder": @"iMessage"},
+               @{@"label": @"Blur",             @"light": @"isInputFieldBlurEnabled",   @"dark": @"isInputFieldBlurEnabledDark",   @"type": @"bool",
+                 @"reloadsOnToggle": @YES},
                @{@"label": @"Blur Style",       @"light": @"inputFieldBlurStyle",       @"dark": @"inputFieldBlurStyleDark",       @"type": @"choice",
+                 @"dependsOnLight": @"isInputFieldBlurEnabled", @"dependsOnDark": @"isInputFieldBlurEnabledDark",
                  @"options": @[
                      @{@"value": @"regular",         @"label": @"Regular"},
                      @{@"value": @"light",           @"label": @"Light"},
@@ -3178,6 +3201,12 @@ static const void *kWAMRowSpecsAssocKey = &kWAMRowSpecsAssocKey;
            @"specs": @[
                @{@"label": @"Enabled",    @"light": @"isCellBlurTintEnabled", @"type": @"bool"},
                @{@"label": @"Tint Color", @"light": @"cellTintColor", @"dark": @"cellTintColorDark", @"type": @"color"},
+           ]},
+        @{ @"title": @"Switches",
+           @"symbol": @"switch.2",
+           @"tint": [UIColor colorWithRed:0.30 green:0.78 blue:0.46 alpha:1.0], // #4CC776 switch green
+           @"specs": @[
+               @{@"label": @"Tint Color", @"light": @"advancedSwitchTintColor", @"dark": @"advancedSwitchTintColorDark", @"type": @"color"},
            ]},
         @{ @"title": @"Link Previews",
            @"symbol": @"link.circle.fill",
@@ -6630,9 +6659,15 @@ static const char kWAMDrawerOverlayKey = 0;
                         overlay.frame = [iv.superview convertRect:iv.frame toView:self];
                         overlay.hidden = NO;
                         [self bringSubviewToFront:overlay];
-                    } else if (overlay) {
-                        [overlay removeFromSuperview];
-                        objc_setAssociatedObject(self, &kWAMDrawerOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        // Hide the stock glyph underneath so an alpha'd custom color
+                        // doesn't blend with it.
+                        iv.hidden = YES;
+                    } else {
+                        iv.hidden = NO;
+                        if (overlay) {
+                            [overlay removeFromSuperview];
+                            objc_setAssociatedObject(self, &kWAMDrawerOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        }
                     }
                     drawers++;
                 }
@@ -6938,8 +6973,23 @@ static const char kWAMDrawerOverlayKey = 0;
     [self updateDetailsBackground];
     [self applyDetailsNavTitleColor];
     for (UITableViewCell *cell in self.visibleCells) {
+        // Drive the label recolor from here: each label's own notification observer
+        // doesn't fire reliably on these cells, so push it from the (stable) table view.
+        [self wamRecolorTableLabelsInView:cell];
         [cell setNeedsLayout];
     }
+}
+
+%new
+- (NSInteger)wamRecolorTableLabelsInView:(UIView *)view {
+    NSInteger count = 0;
+    if ([view isKindOfClass:%c(UITableViewLabel)] &&
+        [view respondsToSelector:@selector(wamApplyTableLabelColor)]) {
+        [(UITableViewLabel *)view wamApplyTableLabelColor];
+        count++;
+    }
+    for (UIView *sub in view.subviews) count += [self wamRecolorTableLabelsInView:sub];
+    return count;
 }
 
 %new
@@ -8117,25 +8167,92 @@ static const char kWAMDrawerOverlayKey = 0;
 
 %hook UITableViewLabel
 
+static const char kWAMTableLabelOrigKey = 0;
+static const char kWAMTableLabelUpdatingKey = 0;
+
+static BOOL wamLabelIsRedish(UIColor *color) {
+    CGFloat r = 0, g = 0, b = 0, a = 0;
+    if (color && [color getRed:&r green:&g blue:&b alpha:&a]) {
+        if (r > 0.7 && g < 0.3 && b < 0.3) return YES;
+    }
+    return NO;
+}
+
+%new
+- (void)wamApplyTableLabelColor {
+    UIColor *customTint = getAdvancedTableLabelColor();
+    objc_setAssociatedObject(self, &kWAMTableLabelUpdatingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    id origObj = objc_getAssociatedObject(self, &kWAMTableLabelOrigKey);
+    // Decide whether this is a genuine destructive (Delete/Block — systemRed) label by
+    // its STOCK color, not its current one. The current color may be our own reddish
+    // custom tint, which previously caused us to mistake normal labels for destructive
+    // ones and refuse to recolor them.
+    BOOL destructive;
+    if (origObj) {
+        destructive = (origObj != [NSNull null]) && wamLabelIsRedish((UIColor *)origObj);
+    } else {
+        destructive = wamLabelIsRedish(self.textColor);
+    }
+
+    if (!destructive) {
+        if (customTint) {
+            if (!origObj) {
+                UIColor *cur = self.textColor;
+                // Never record our own tint as the "stock" color.
+                if (!(cur && [cur isEqual:customTint])) {
+                    objc_setAssociatedObject(self, &kWAMTableLabelOrigKey,
+                        cur ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
+            self.textColor = customTint;
+        } else if (origObj) {
+            self.textColor = (origObj == [NSNull null]) ? nil : (UIColor *)origObj;
+            objc_setAssociatedObject(self, &kWAMTableLabelOrigKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+
+    objc_setAssociatedObject(self, &kWAMTableLabelUpdatingKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customTint = getAdvancedTableLabelColor();
-    if (!customTint) return;
-    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
-    if (self.textColor && [self.textColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
-        if (red > 0.7 && green < 0.3 && blue < 0.3) return;
+
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+            selector:@selector(wamHandleTableLabelPrefsChanged)
+            name:kPrefsChangedNotification
+            object:nil];
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
     }
-    self.textColor = customTint;
+
+    [self wamApplyTableLabelColor];
+}
+
+%new
+- (void)wamHandleTableLabelPrefsChanged {
+    if (!isTweakEnabled()) return;
+    refreshPrefs();
+    [self wamApplyTableLabelColor];
 }
 
 - (void)setTextColor:(UIColor *)color {
     if (!isTweakEnabled()) { %orig; return; }
-    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
-    if (color && [color getRed:&red green:&green blue:&blue alpha:&alpha]) {
-        if (red > 0.7 && green < 0.3 && blue < 0.3) { %orig; return; }
-    }
+    // Our own writes pass straight through.
+    NSNumber *updating = objc_getAssociatedObject(self, &kWAMTableLabelUpdatingKey);
+    if (updating && [updating boolValue]) { %orig; return; }
+    if (wamLabelIsRedish(color)) { %orig; return; }
     UIColor *customTint = getAdvancedTableLabelColor();
+    // Record iOS's intended (stock) color so a toggle-off can restore it — even while
+    // customization is active, since iOS still passes the genuine stock color during
+    // cell configuration. Skip only when the incoming color is our own tint bleeding
+    // back from another code path, which would corrupt the saved stock color.
+    if (!(customTint && color && [color isEqual:customTint])) {
+        objc_setAssociatedObject(self, &kWAMTableLabelOrigKey, color ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     if (customTint) { %orig(customTint); return; }
     %orig;
 }
@@ -8146,10 +8263,14 @@ static const char kWAMDrawerOverlayKey = 0;
     if (@available(iOS 13.0, *)) {
         if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
             refreshPrefs();
-            UIColor *customTint = getAdvancedTableLabelColor();
-            if (customTint) self.textColor = customTint;
+            [self wamApplyTableLabelColor];
         }
     }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
 }
 
 %end
@@ -9069,15 +9190,33 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
 
 %hook CKDetailsSearchResultsTitleHeaderCell
 
+static const char kWAMHeaderLabelOrigKey = 0;
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
+    if (self.window) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+            selector:@selector(wamHandleHeaderPrefsChanged)
+            name:kPrefsChangedNotification
+            object:nil];
+    } else {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    }
     [self applyHeaderStyle];
 }
 
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+    [self applyHeaderStyle];
+}
+
+%new
+- (void)wamHandleHeaderPrefsChanged {
+    if (!isTweakEnabled()) return;
+    refreshPrefs();
     [self applyHeaderStyle];
 }
 
@@ -9096,12 +9235,38 @@ static BOOL isReplicantInsidePlatter(UIView *view) {
             }
         }
     }
-    UIColor *tintColor = getSystemTintColor();
-    if (tintColor) {
-        for (UIView *subview in self.subviews) {
-            if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = tintColor;
+    // Same logic as the details cell labels: color with the advanced table-label
+    // color when explicitly set, otherwise revert to the stored stock color.
+    UIColor *labelColor = nil;
+    if (isAdvancedValueExplicitlySet(@"advancedTableLabelColor", @"advancedTableLabelColorDark") ||
+        isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark")) {
+        labelColor = getAdvancedTableLabelColor();
+    }
+    for (UIView *subview in self.subviews) {
+        if (![subview isKindOfClass:[UILabel class]]) continue;
+        UILabel *label = (UILabel *)subview;
+        if (labelColor) {
+            if (!objc_getAssociatedObject(label, &kWAMHeaderLabelOrigKey)) {
+                UIColor *cur = label.textColor;
+                if (!(cur && [cur isEqual:labelColor])) {
+                    objc_setAssociatedObject(label, &kWAMHeaderLabelOrigKey,
+                        cur ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
+            label.textColor = labelColor;
+        } else {
+            id orig = objc_getAssociatedObject(label, &kWAMHeaderLabelOrigKey);
+            if (orig) {
+                label.textColor = (orig == [NSNull null]) ? nil : (UIColor *)orig;
+                objc_setAssociatedObject(label, &kWAMHeaderLabelOrigKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
         }
     }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
 }
 
 %end

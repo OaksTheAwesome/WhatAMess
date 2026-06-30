@@ -75,6 +75,10 @@ static NSString *gWAMCurrentContactDisplayName = nil;
 static NSString *gWAMTriggerNameOverride = nil;
 static NSString *gWAMActiveChatName = nil;
 static BOOL gWAMChatIsActiveSurface = NO;
+// Set while a conversation is being shown in a context-menu peek/preview (a detached
+// CKMessagesController hosted in a UIDropShadowView). The heartbeat treats this as an
+// active surface so per-contact values resolve in the preview.
+static BOOL gWAMPreviewActive = NO;
 static NSTimeInterval gWAMCacheSetAt = 0;
 static NSTimeInterval gWAMTapSetAt = 0;
 
@@ -532,7 +536,11 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     BOOL convListIsTop = [topVCClass containsString:@"ConversationList"] ||
                          [topVCClass containsString:@"ConvList"];
     BOOL chatIsActiveSurface;
-    if (!chatIsVisible) {
+    if (gWAMPreviewActive) {
+        // A conversation peek is showing — keep per-contact resolving for it. The
+        // preview's CKMessagesController already set the contact name; don't clear it.
+        chatIsActiveSurface = YES;
+    } else if (!chatIsVisible) {
         chatIsActiveSurface = NO;
     } else if (convListIsTop) {
         // During an interactive back-swipe the nav momentarily reports the list as
@@ -586,6 +594,20 @@ static UIViewController *wamFindVCInHierarchy(UIViewController *vc, Class target
         return wamFindVCInHierarchy(vc.presentedViewController, targetClass);
     }
     return nil;
+}
+
+// A context-menu peek hosts a detached CKMessagesController (no parent / presenting
+// VC) inside a UIDropShadowView. Used to treat the peek as an active chat surface.
+static BOOL wamIsPreviewContext(UIViewController *vc) {
+    if (!vc || vc.parentViewController || vc.presentingViewController) return NO;
+    UIView *v = vc.viewIfLoaded;
+    int depth = 0;
+    while (v && depth < 12) {
+        if ([NSStringFromClass([v class]) isEqualToString:@"UIDropShadowView"]) return YES;
+        v = v.superview;
+        depth++;
+    }
+    return NO;
 }
 
 static NSString *getCurrentContactName(void) {
@@ -5230,6 +5252,14 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 -(void)viewWillAppear:(BOOL)animated {
     %orig;
     if (isiOS15()) updateDarkModeFromTraits(self.traitCollection);
+    // A context-menu peek is a detached CKMessagesController; its setCurrentConversation
+    // has already resolved the contact name. Flag it so the heartbeat keeps the surface
+    // active (otherwise it clears per-contact every frame since the preview VC isn't on
+    // the nav stack).
+    if (isTweakEnabled() && wamIsPreviewContext(self)) {
+        objc_setAssociatedObject(self, @selector(wamIsPreviewContext:), @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gWAMPreviewActive = YES;
+    }
     gWAMChatIsActiveSurface = YES;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
 }
@@ -5341,6 +5371,10 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 - (void)viewDidDisappear:(BOOL)animated {
     %orig;
     if (!isTweakEnabled()) return;
+    if (objc_getAssociatedObject(self, @selector(wamIsPreviewContext:))) {
+        objc_setAssociatedObject(self, @selector(wamIsPreviewContext:), nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gWAMPreviewActive = NO;
+    }
     if (self.isMovingFromParentViewController || self.isBeingDismissed) {
         [self wamClearChatAndForceRefresh];
     }

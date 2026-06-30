@@ -505,11 +505,13 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     static NSString *prevTopVCClass = nil;
     Class navCls = %c(CKNavigationController);
     NSString *topVCClass = @"(none)";
+    BOOL navTransitioning = NO;
     if (navCls && foundCtrl) {
         for (UIViewController *child in foundCtrl.childViewControllers) {
             if ([child isKindOfClass:navCls]) {
                 UINavigationController *nav = (UINavigationController *)child;
                 topVCClass = NSStringFromClass([nav.topViewController class]) ?: @"(nil)";
+                navTransitioning = (nav.transitionCoordinator != nil);
                 break;
             }
         }
@@ -533,9 +535,12 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     if (!chatIsVisible) {
         chatIsActiveSurface = NO;
     } else if (convListIsTop) {
-        chatIsActiveSurface = NO;
+        // During an interactive back-swipe the nav momentarily reports the list as
+        // top before the pop commits. Don't drop an already-active chat surface mid
+        // transition, or per-contact values flash to global until the swipe settles.
+        chatIsActiveSurface = (navTransitioning && gWAMChatIsActiveSurface) ? YES : NO;
     } else if ([topVCClass isEqualToString:@"(none)"] && listInWindow && !conv) {
-        chatIsActiveSurface = NO;
+        chatIsActiveSurface = (navTransitioning && gWAMChatIsActiveSurface) ? YES : NO;
     } else {
         chatIsActiveSurface = YES;
     }
@@ -6191,6 +6196,22 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
 %hook CKMessageEntryView
 
+- (void)willMoveToWindow:(UIWindow *)newWindow {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // The chat's message bar lives in a UITextEffectsWindow, and the push animates a
+    // _UIReplicantView replica of it that is captured the instant the bar attaches to
+    // that window — BEFORE didMoveToWindow/viewWillAppear/the heartbeat flip the
+    // surface active, so the replica freezes global values for the whole slide-in.
+    // willMoveToWindow runs before the attach (before the replica capture), and the
+    // contact name is already resolved by setCurrentConversation, so mark the surface
+    // active here and customize now — the replica then captures per-contact.
+    if (newWindow && gWAMCurrentContactName.length) {
+        gWAMChatIsActiveSurface = YES;
+        [self applyInputFieldCustomization];
+    }
+}
+
 - (void)layoutSubviews {
     %orig;
     if (isTweakEnabled()) {
@@ -6691,6 +6712,18 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)applyColorsDirectly {
     refreshPrefs();
     [self wamApplyEntryButtonColors];
+}
+
+- (void)willMoveToWindow:(UIWindow *)newWindow {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // Apply before the bar attaches to its window, so the push's replica captures
+    // per-contact button colors (see CKMessageEntryView willMoveToWindow:).
+    if (newWindow && gWAMCurrentContactName.length) {
+        gWAMChatIsActiveSurface = YES;
+        refreshPrefs();
+        [self wamApplyEntryButtonColors];
+    }
 }
 
 - (void)didMoveToWindow {

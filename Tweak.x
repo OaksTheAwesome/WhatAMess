@@ -5864,13 +5864,24 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
         CGFloat curH = effectView.frame.size.height;
         BOOL needsExpand = !lastExpandedH || curH < lastExpandedH.floatValue - (kWAMBarExpansion / 2);
         if (needsExpand) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
             CGRect expandedFrame = effectView.frame;
             expandedFrame.origin.y -= kWAMBarExpansion;
             expandedFrame.size.height += kWAMBarExpansion;
-            effectView.frame = expandedFrame;
-            [CATransaction commit];
+            if (lastExpandedH) {
+                // Re-expansion happens because the bar resized for a keyboard show/hide.
+                // Set the frame WITHOUT disabling actions so it rides the system's
+                // in-flight keyboard animation and glides with the bar — disabling
+                // actions here snaps the blur ahead of the bar, leaving a transient gap
+                // against the keyboard / screen bottom until layout settles.
+                effectView.frame = expandedFrame;
+            } else {
+                // First expansion on chat open: no keyboard animation to ride, apply
+                // instantly so the blur doesn't visibly grow in.
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                effectView.frame = expandedFrame;
+                [CATransaction commit];
+            }
             objc_setAssociatedObject(effectView, &kWAMEffectExpandedKey, @(expandedFrame.size.height), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
 

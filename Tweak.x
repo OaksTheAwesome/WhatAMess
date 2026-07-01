@@ -1720,7 +1720,13 @@ static UIColor *getSentBubbleColor() {
 
 static UIColor *getReceivedBubbleColor() {
     NSString *key = isDarkMode() ? @"receivedBubbleColorDark" : @"receivedBubbleColor";
-    return colorFromHex(effectiveValueForKey(key)) ?: [UIColor colorWithRed:0.9 green:0.9 blue:0.9 alpha:1.0];
+    UIColor *c = colorFromHex(effectiveValueForKey(key));
+    if (c) return c;
+    // No custom value set: fall back to a gray matching the stock received bubble for
+    // the current mode. A fixed light gray here read as near-white in dark mode.
+    return isDarkMode()
+        ? [UIColor colorWithRed:0.149 green:0.149 blue:0.161 alpha:1.0]
+        : [UIColor colorWithRed:0.918 green:0.918 blue:0.922 alpha:1.0];
 }
 
 static UIColor *getReceivedTextColor() {

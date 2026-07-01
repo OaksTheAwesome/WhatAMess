@@ -87,18 +87,25 @@
     return WEXITSTATUS(status) == 0;
 }
 
-- (void)exportPreset {
-    // Keys to exclude from the preset
-    NSSet *excludedKeys = [NSSet setWithArray:@[
-        @"editingDarkMode",
-        @"isEnabled"
-    ]];
+// A key is device-local and must never be shared in a preset if it's app state, or
+// ANY per-contact data (keyed by contact names, references private images). Per-contact
+// keys are matched by prefix so any current/future "perContact*" key is covered.
+// Such keys are excluded from export (privacy) and preserved on import (so importing
+// someone else's preset never wipes your own per-contact customizations).
+- (BOOL)isPresetExcludedKey:(NSString *)key {
+    if ([key isEqualToString:@"editingDarkMode"]) return YES;
+    if ([key isEqualToString:@"isEnabled"]) return YES;
+    if ([key isEqualToString:@"chatIdentifierAliases"]) return YES;
+    if ([key hasPrefix:@"perContact"]) return YES;
+    return NO;
+}
 
-    // Read current prefs and strip excluded keys
+- (void)exportPreset {
+    // Read current prefs and strip excluded (device-local / private) keys
     NSMutableDictionary *prefs = [self readPrefs];
     NSMutableDictionary *presetPrefs = [NSMutableDictionary new];
     for (NSString *key in prefs) {
-        if (![excludedKeys containsObject:key]) {
+        if (![self isPresetExcludedKey:key]) {
             presetPrefs[key] = prefs[key];
         }
     }
@@ -233,10 +240,10 @@
         NSMutableDictionary *currentPrefs = [self readPrefs];
         NSMutableDictionary *freshPrefs = [NSMutableDictionary new];
 
-        // Keep only keys that are intentionally excluded from presets
-        NSSet *preservedKeys = [NSSet setWithArray:@[@"editingDarkMode", @"isEnabled"]];
-        for (NSString *key in preservedKeys) {
-            if (currentPrefs[key]) freshPrefs[key] = currentPrefs[key];
+        // Keep the device-local/private keys (same rule as export) so the user's own
+        // per-contact data and aliases survive importing someone else's preset.
+        for (NSString *key in currentPrefs) {
+            if ([self isPresetExcludedKey:key]) freshPrefs[key] = currentPrefs[key];
         }
 
         // Apply imported preset on top of the clean slate

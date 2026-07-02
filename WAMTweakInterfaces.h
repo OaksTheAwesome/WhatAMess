@@ -79,6 +79,9 @@
 
 @interface CKBalloonImageView : UIImageView
 @property (nonatomic, strong) UIImage *image;
+- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor;
+- (void)wamLayoutBlurBubble;
+- (void)wamRemoveReceivedBlur;
 @end
 
 @interface CKColoredBalloonView : UIView
@@ -288,6 +291,8 @@
 @end
 
 @interface CKMessageAcknowledgmentPickerBarView : UIView
+- (void)wamApplyPickerBlur;
+- (void)wamRemovePickerBlur;
 @end
 
 @interface CKPinnedConversationSummaryBubble : UIView

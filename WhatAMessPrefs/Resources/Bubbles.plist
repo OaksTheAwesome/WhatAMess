@@ -52,6 +52,24 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>Blur Bubbles</string>
+			<key>footerText</key>
+			<string>Gives received message bubbles a blurred background. Your received bubble color tints the blur.</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>lightModeKey</key>
+			<string>isBlurBubblesEnabled</string>
+			<key>label</key>
+			<string>Enable Blur Bubbles</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>Bubble Colors</string>
 			<key>footerText</key>
 			<string>Changes the color of bubbles based on type.</string>

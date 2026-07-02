@@ -1165,6 +1165,12 @@ BOOL isCustomBubbleColorsEnabled() {
     return v ? [v boolValue] : NO;
 }
 
+BOOL isBlurBubblesEnabled() {
+    NSString *key = isDarkMode() ? @"isBlurBubblesEnabledDark" : @"isBlurBubblesEnabled";
+    id v = effectiveValueForKey(key);
+    return v ? [v boolValue] : NO;
+}
+
 BOOL isModernMessageBarEnabled() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"isModernMessageBarEnabledDark" : @"isModernMessageBarEnabled";
@@ -3092,6 +3098,12 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
     UIView *root = [UIView new];
 
     NSArray *cards = @[
+        @{ @"title": @"Blur",
+           @"symbol": @"square.on.square.dashed",
+           @"tint": [UIColor systemTealColor],
+           @"specs": @[
+               @{@"label": @"Blur Bubbles", @"light": @"isBlurBubblesEnabled", @"dark": @"isBlurBubblesEnabledDark", @"type": @"bool"},
+           ]},
         @{ @"title": @"iMessage",
            @"symbol": @"bubble.right.fill",
            @"tint": [UIColor systemCyanColor],
@@ -5463,6 +5475,9 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
     BOOL isReaction = wamIsInsideReactionContext(self, 8);
     if (isReaction) {
+        // With Blur Bubbles on, the reaction balloon is drawn as a masked blur, so keep the
+        // gradient fill hidden — otherwise it re-tints on top of the blur (double tint).
+        if (isBlurBubblesEnabled()) { self.hidden = YES; return; }
         UIColor *reactionColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
         if (reactionColor) {
             self.hidden = NO;
@@ -5496,6 +5511,7 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
     BOOL isReaction = wamIsInsideReactionContext(self, 8);
     if (isReaction) {
+        if (isBlurBubblesEnabled()) { self.hidden = YES; return; }
         UIColor *reactionColor = getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self);
         if (reactionColor) {
             self.hidden = NO;
@@ -5526,17 +5542,204 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
 %end
 
+// Fill the balloon shape with a solid color (the classic tinted-bubble look).
+static UIImage *wamTintBalloonImage(UIImage *image, UIColor *targetColor, BOOL applyReceivedInsets) {
+    UIImageRenderingMode originalMode = image.renderingMode;
+    UIEdgeInsets capInsets = image.capInsets;
+    UIImageResizingMode resizingMode = image.resizingMode;
+    UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
+    CGFloat scale = image.scale;
+
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
+    CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
+    [image drawInRect:rect];
+    CGContextRef context = UIGraphicsGetCurrentContext();
+    CGContextSetBlendMode(context, kCGBlendModeSourceIn);
+    [targetColor setFill];
+    CGContextFillRect(context, rect);
+    UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+
+    if (applyReceivedInsets) {
+        alignmentInsets.left += 6.0;
+        alignmentInsets.right -= 8.0;
+    }
+    tintedImage = [tintedImage resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
+    tintedImage = [tintedImage imageWithAlignmentRectInsets:alignmentInsets];
+    tintedImage = [tintedImage imageWithRenderingMode:originalMode];
+    return tintedImage;
+}
+
+// ----- Blur bubbles (received) --------------------------------------------------------
+// A plain UIVisualEffectView blur behind the received bubble text, clipped to the balloon
+// shape via blur.layer.mask. The mask image is produced by drawing the balloon's own
+// resizable image at the bubble's actual size (UIKit applies the 9-slice cap insets), so
+// the stretch and orientation match the system exactly — no manual cap-inset math, no
+// mirror. The material's own tint subview (_UIVisualEffectSubview) is removed so the blur
+// doesn't darken/lighten; the bubble color is applied as our own tint instead.
+
+static char kWAMBlurViewKey;
+static char kWAMBlurTintKey;
+static char kWAMBlurMaskKey;      // CALayer used as blur.layer.mask
+static char kWAMBlurShapeKey;     // the balloon shape image (resizable)
+static char kWAMBlurTintColorKey; // resolved bubble/reaction color for the tint
+
+// A fully-transparent stand-in with the EXACT geometry the solid tint path (wamTintBalloonImage)
+// produces — same cap insets, alignment rect insets (incl. the received +6/-8 adjustment) and
+// rendering mode — so the image view lays out identically to a normal tinted bubble (text stays
+// aligned, short bubbles don't squish) while the masked blur below becomes the visible bubble.
+static UIImage *wamClearImageLike(UIImage *image, BOOL applyReceivedInsets) {
+    UIImageRenderingMode originalMode = image.renderingMode;
+    UIEdgeInsets capInsets = image.capInsets;
+    UIImageResizingMode resizingMode = image.resizingMode;
+    UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
+    CGFloat scale = image.scale;
+
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
+    UIImage *out = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+
+    if (applyReceivedInsets) {
+        alignmentInsets.left += 6.0;
+        alignmentInsets.right -= 8.0;
+    }
+    out = [out resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
+    out = [out imageWithAlignmentRectInsets:alignmentInsets];
+    out = [out imageWithRenderingMode:originalMode];
+    return out;
+}
+
+// Remove the material's tint overlay so only the pure blur (backdrop) remains — this drops
+// the built-in darkening; our own color tint supplies the color. Match the EXACT class:
+// the backdrop and content view are subclasses of _UIVisualEffectSubview, so isKindOfClass
+// would nuke them too (leaving nothing to render).
+static void wamStripEffectTint(UIVisualEffectView *v) {
+    Class tintCls = NSClassFromString(@"_UIVisualEffectSubview");
+    if (!tintCls) return;
+    for (UIView *sub in [v.subviews copy]) {
+        if ([sub isMemberOfClass:tintCls]) [sub removeFromSuperview];
+    }
+}
+
+// A plain adaptive blur (neither forced light nor dark) — the bubble color is applied on
+// top as a tint.
+static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
+    UIBlurEffect *eff = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    UIVisualEffectView *vev = [[UIVisualEffectView alloc] initWithEffect:eff];
+    vev.frame = frame;
+    return vev;
+}
+
 %hook CKBalloonImageView
+
+%new
+- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor {
+    UIVisualEffectView *blur = objc_getAssociatedObject(self, &kWAMBlurViewKey);
+    if (!blur) {
+        blur = wamMakeBlurView(self.bounds);
+        blur.userInteractionEnabled = NO;
+        [self insertSubview:blur atIndex:0];   // stay behind the text
+        objc_setAssociatedObject(self, &kWAMBlurViewKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        // Color tint over the blur, inside the content view so the mask clips it too.
+        CALayer *tint = [CALayer layer];
+        [blur.contentView.layer addSublayer:tint];
+        objc_setAssociatedObject(self, &kWAMBlurTintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    objc_setAssociatedObject(self, &kWAMBlurShapeKey, shape, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurTintColorKey, tintColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [self wamLayoutBlurBubble];
+}
+
+%new
+- (void)wamLayoutBlurBubble {
+    UIVisualEffectView *blur = objc_getAssociatedObject(self, &kWAMBlurViewKey);
+    if (!blur) return;
+    CGRect b = self.bounds;
+    if (b.size.width <= 0 || b.size.height <= 0) return;
+
+    wamStripEffectTint(blur);
+
+    UIColor *tintColor = objc_getAssociatedObject(self, &kWAMBlurTintColorKey) ?: getReceivedBubbleColor();
+    UIImage *shape = objc_getAssociatedObject(self, &kWAMBlurShapeKey);
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+
+    blur.frame = b;
+
+    CALayer *tint = objc_getAssociatedObject(self, &kWAMBlurTintKey);
+    tint.frame = b;
+    tint.backgroundColor = tintColor.CGColor;   // respect the color's own alpha
+
+    // Render the resizable balloon image at the bubble's actual size — UIKit applies the
+    // 9-slice cap insets (correct stretch + orientation) — and use its alpha as the mask.
+    CALayer *mask = objc_getAssociatedObject(self, &kWAMBlurMaskKey);
+    if (!mask) {
+        mask = [CALayer layer];
+        objc_setAssociatedObject(self, &kWAMBlurMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (shape) {
+        UIImage *stretch = [shape resizableImageWithCapInsets:shape.capInsets
+                                                 resizingMode:UIImageResizingModeStretch];
+        UIGraphicsBeginImageContextWithOptions(b.size, NO, 0);
+        [stretch drawInRect:CGRectMake(0, 0, b.size.width, b.size.height)];
+        UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        mask.contents = (id)rendered.CGImage;
+    }
+    mask.frame = b;
+    blur.layer.mask = mask;
+
+    [CATransaction commit];
+}
+
+%new
+- (void)wamRemoveReceivedBlur {
+    UIView *blur = objc_getAssociatedObject(self, &kWAMBlurViewKey);
+    if (blur) [blur removeFromSuperview];
+    objc_setAssociatedObject(self, &kWAMBlurViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurShapeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurTintColorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
 - (void)setImage:(UIImage *)image {
     if (!isTweakEnabled() || !image) { %orig; return; }
 
     BOOL isInsideReaction = wamIsReactionBalloonAncestor(self, 6);
     BOOL hasReactionBalloonOverride = isAdvancedValueExplicitlySet(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark");
-    if (!isCustomBubbleColorsEnabled() && !(isInsideReaction && hasReactionBalloonOverride)) { %orig; return; }
+    BOOL blurEnabled = isBlurBubblesEnabled();
+
+    if (!isCustomBubbleColorsEnabled() && !blurEnabled && !(isInsideReaction && hasReactionBalloonOverride)) {
+        [self wamRemoveReceivedBlur];
+        %orig; return;
+    }
 
     if ([self isKindOfClass:%c(CKColoredBalloonView)]) {
         CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
+
+        // Blur applies to received bubbles and reaction (acknowledgment) balloons.
+        if (blurEnabled) {
+            if (isInsideReaction) {
+                UIColor *rc = hasReactionBalloonOverride
+                    ? getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self)
+                    : getReceivedBubbleColor();
+                [self wamApplyReceivedBlurWithImage:image tintColor:rc];
+                %orig(wamClearImageLike(image, NO));   // reaction geometry: no received inset shift
+                return;
+            }
+            if (coloredSelf.color == -1) {
+                [self wamApplyReceivedBlurWithImage:image tintColor:getReceivedBubbleColor()];
+                %orig(wamClearImageLike(image, YES));
+                return;
+            }
+        }
+
+        // Any other state on this view drops back to solid rendering.
+        [self wamRemoveReceivedBlur];
+
         UIColor *targetColor = nil;
         BOOL applyReceivedInsets = NO;
         if (isInsideReaction && hasReactionBalloonOverride) {
@@ -5549,35 +5752,22 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
         } else if (coloredSelf.color == 0) {
             targetColor = getSMSSentBubbleColor();
         }
-        if (targetColor) {
-            UIImageRenderingMode originalMode = image.renderingMode;
-            UIEdgeInsets capInsets = image.capInsets;
-            UIImageResizingMode resizingMode = image.resizingMode;
-            UIEdgeInsets alignmentInsets = image.alignmentRectInsets;
-            CGFloat scale = image.scale;
 
-            UIGraphicsBeginImageContextWithOptions(image.size, NO, scale);
-            CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
-            [image drawInRect:rect];
-            CGContextRef context = UIGraphicsGetCurrentContext();
-            CGContextSetBlendMode(context, kCGBlendModeSourceIn);
-            [targetColor setFill];
-            CGContextFillRect(context, rect);
-            UIImage *tintedImage = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-
-            if (applyReceivedInsets) {
-                alignmentInsets.left += 6.0;
-                alignmentInsets.right -= 8.0;
-            }
-            tintedImage = [tintedImage resizableImageWithCapInsets:capInsets resizingMode:resizingMode];
-            tintedImage = [tintedImage imageWithAlignmentRectInsets:alignmentInsets];
-            tintedImage = [tintedImage imageWithRenderingMode:originalMode];
-            %orig(tintedImage);
+        BOOL wantTint = (isCustomBubbleColorsEnabled()) || (isInsideReaction && hasReactionBalloonOverride);
+        if (targetColor && wantTint) {
+            %orig(wamTintBalloonImage(image, targetColor, applyReceivedInsets));
             return;
         }
     }
     %orig;
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    if (objc_getAssociatedObject(self, &kWAMBlurViewKey)) {
+        [self wamLayoutBlurBubble];
+    }
 }
 
 %end
@@ -8576,6 +8766,129 @@ static BOOL wamLabelIsRedish(UIColor *color) {
 
 %end
 
+// ----- Blur bubbles (transcript reaction / tapback balloons) --------------------------
+// The reaction balloon draws its fill with two plain UIImageViews (shadow + shape) and a
+// CKGradientView, with the glyph on top. The shape image is exact-size (no cap insets), so
+// we mask a blur straight to it (1:1), hide the solid fill, and tint — same look as the
+// message bubbles.
+
+static char kWAMRxnBlurKey;
+static char kWAMRxnTintKey;
+static char kWAMRxnMaskKey;
+
+// The balloon shape image view = the last plain UIImageView (drawn on top of the shadow).
+static UIImageView *wamReactionShapeView(UIView *c) {
+    UIView *blur = objc_getAssociatedObject(c, &kWAMRxnBlurKey);
+    UIImageView *shape = nil;
+    for (UIView *s in c.subviews) {
+        if (s == blur) continue;
+        if ([s isMemberOfClass:[UIImageView class]] && ((UIImageView *)s).image) shape = (UIImageView *)s;
+    }
+    return shape;
+}
+
+// Hide/show the solid fill (the plain UIImageViews + CKGradientView), leaving the glyph.
+static void wamSetReactionFillHidden(UIView *c, BOOL hidden) {
+    Class gradCls = NSClassFromString(@"CKGradientView");
+    UIView *blur = objc_getAssociatedObject(c, &kWAMRxnBlurKey);
+    for (UIView *s in c.subviews) {
+        if (s == blur) continue;
+        if ([s isMemberOfClass:[UIImageView class]] || (gradCls && [s isKindOfClass:gradCls]))
+            s.hidden = hidden;
+    }
+}
+
+static void wamApplyReactionBlur(UIView *c, UIColor *tint) {
+    CGRect b = c.bounds;
+    if (b.size.width <= 0 || b.size.height <= 0) return;
+
+    UIImageView *shapeView = wamReactionShapeView(c);
+    UIImage *shape = shapeView.image;
+    if (!shape) return;   // shape not ready yet — try again next layout
+
+    // The shape image view is horizontally mirrored (via a transform) for reactions on the
+    // opposite side; the blur is its sibling and doesn't inherit that, so mirror the mask.
+    BOOL flip = (shapeView.transform.a < 0) || (shapeView.layer.transform.m11 < 0);
+
+    UIVisualEffectView *blur = objc_getAssociatedObject(c, &kWAMRxnBlurKey);
+    if (!blur) {
+        blur = wamMakeBlurView(b);
+        blur.userInteractionEnabled = NO;
+        [c insertSubview:blur atIndex:0];
+        objc_setAssociatedObject(c, &kWAMRxnBlurKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        CALayer *t = [CALayer layer];
+        [blur.contentView.layer addSublayer:t];
+        objc_setAssociatedObject(c, &kWAMRxnTintKey, t, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    wamStripEffectTint(blur);
+    wamSetReactionFillHidden(c, YES);
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    blur.frame = b;
+    [c sendSubviewToBack:blur];
+
+    CALayer *t = objc_getAssociatedObject(c, &kWAMRxnTintKey);
+    t.frame = b;
+    t.backgroundColor = tint.CGColor;
+
+    // Mask the blur to the balloon shape (exact-size image, rendered 1:1).
+    CALayer *mask = objc_getAssociatedObject(c, &kWAMRxnMaskKey);
+    if (!mask) {
+        mask = [CALayer layer];
+        objc_setAssociatedObject(c, &kWAMRxnMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UIGraphicsBeginImageContextWithOptions(b.size, NO, 0);
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    if (flip) {
+        CGContextTranslateCTM(ctx, b.size.width, 0);
+        CGContextScaleCTM(ctx, -1, 1);
+    }
+    [shape drawInRect:CGRectMake(0, 0, b.size.width, b.size.height)];
+    UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    mask.frame = b;
+    mask.contents = (id)rendered.CGImage;
+    blur.layer.mask = mask;
+
+    [CATransaction commit];
+}
+
+static void wamRemoveReactionBlur(UIView *c) {
+    UIView *blur = objc_getAssociatedObject(c, &kWAMRxnBlurKey);
+    if (blur) [blur removeFromSuperview];
+    objc_setAssociatedObject(c, &kWAMRxnBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(c, &kWAMRxnTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(c, &kWAMRxnMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    wamSetReactionFillHidden(c, NO);
+}
+
+static UIColor *wamReactionBlurTint(UIView *c) {
+    if (isAdvancedValueExplicitlySet(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark"))
+        return getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, c);
+    return getReceivedBubbleColor();
+}
+
+%hook CKAggregateAcknowledgmentBalloonView
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    UIView *v = (UIView *)self;
+    if (isBlurBubblesEnabled()) wamApplyReactionBlur(v, wamReactionBlurTint(v));
+    else wamRemoveReactionBlur(v);
+}
+%end
+
+%hook CKAggregateAcknowledgmentGradientBalloonView
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    UIView *v = (UIView *)self;
+    if (isBlurBubblesEnabled()) wamApplyReactionBlur(v, wamReactionBlurTint(v));
+    else wamRemoveReactionBlur(v);
+}
+%end
+
 %hook CKAggregateAcknowledgementBalloonView
 
 - (void)didMoveToWindow {
@@ -9456,22 +9769,86 @@ static const char kWAMHeaderLabelOrigKey = 0;
 
 %end
 
+static char kWAMPickerBlursKey;
+
 %hook CKMessageAcknowledgmentPickerBarView
+
+// Put a blur view behind each of the picker's background layers (the main pill + the two
+// trailing tail dots), matched to their frame + corner radius. The colored layers on top
+// (with their own alpha) tint the blur.
+%new
+- (void)wamApplyPickerBlur {
+    NSMutableArray *blurs = objc_getAssociatedObject(self, &kWAMPickerBlursKey);
+    if (!blurs) {
+        blurs = [NSMutableArray array];
+        objc_setAssociatedObject(self, &kWAMPickerBlursKey, blurs, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    // The picker's own background layers (exclude the backing layers of our blur views).
+    NSMutableArray<CALayer *> *bgLayers = [NSMutableArray array];
+    for (CALayer *l in self.layer.sublayers) {
+        if ([l.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        [bgLayers addObject:l];
+    }
+
+    while (blurs.count < bgLayers.count) {
+        UIVisualEffectView *bv = wamMakeBlurView(CGRectZero);
+        bv.userInteractionEnabled = NO;
+        [self insertSubview:bv atIndex:0];
+        [blurs addObject:bv];
+    }
+    while (blurs.count > bgLayers.count) {
+        [(UIView *)blurs.lastObject removeFromSuperview];
+        [blurs removeLastObject];
+    }
+
+    for (NSUInteger i = 0; i < bgLayers.count; i++) {
+        CALayer *l = bgLayers[i];
+        UIVisualEffectView *bv = blurs[i];
+        wamStripEffectTint(bv);
+        bv.frame = l.frame;
+        bv.layer.cornerRadius = l.cornerRadius;
+        bv.clipsToBounds = YES;
+        [self sendSubviewToBack:bv];
+    }
+}
+
+%new
+- (void)wamRemovePickerBlur {
+    NSMutableArray *blurs = objc_getAssociatedObject(self, &kWAMPickerBlursKey);
+    for (UIView *b in blurs) [b removeFromSuperview];
+    objc_setAssociatedObject(self, &kWAMPickerBlursKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
+    if (!isTweakEnabled()) return;
+
+    BOOL blurEnabled = isBlurBubblesEnabled();
+    if (blurEnabled) [self wamApplyPickerBlur];
+    else [self wamRemovePickerBlur];
+
+    if (!isCustomBubbleColorsEnabled() && !blurEnabled) return;
     UIColor *customColor = getReceivedBubbleColor();
     if (!customColor) return;
-    for (CALayer *sublayer in self.layer.sublayers) sublayer.backgroundColor = customColor.CGColor;
+    for (CALayer *sublayer in self.layer.sublayers) {
+        if ([sublayer.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        sublayer.backgroundColor = customColor.CGColor;
+    }
 }
 
 - (void)didMoveToWindow {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) return;
+    if (!isTweakEnabled() || !self.window) return;
+    BOOL blurEnabled = isBlurBubblesEnabled();
+    if (blurEnabled) [self wamApplyPickerBlur];
+    if (!isCustomBubbleColorsEnabled() && !blurEnabled) return;
     UIColor *customColor = getReceivedBubbleColor();
     if (!customColor) return;
-    for (CALayer *sublayer in self.layer.sublayers) sublayer.backgroundColor = customColor.CGColor;
+    for (CALayer *sublayer in self.layer.sublayers) {
+        if ([sublayer.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        sublayer.backgroundColor = customColor.CGColor;
+    }
 }
 
 %end

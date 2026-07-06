@@ -75,11 +75,12 @@
 -(NSArray *)colors;
 -(BOOL)isInsideReactionBubble;
 -(void)applyColorRecursively:(UIColor *)color;
+-(void)wamApplySentBlur:(int)color;
 @end
 
 @interface CKBalloonImageView : UIImageView
 @property (nonatomic, strong) UIImage *image;
-- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor;
+- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor mirror:(BOOL)mirror;
 - (void)wamLayoutBlurBubble;
 - (void)wamRemoveReceivedBlur;
 @end
@@ -293,6 +294,7 @@
 @interface CKMessageAcknowledgmentPickerBarView : UIView
 - (void)wamApplyPickerBlur;
 - (void)wamRemovePickerBlur;
+- (void)wamHidePickerTail;
 @end
 
 @interface CKPinnedConversationSummaryBubble : UIView

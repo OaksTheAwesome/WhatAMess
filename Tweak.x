@@ -1079,11 +1079,9 @@ static CGFloat getEffectiveChatBgBlur() {
     wamResolvePerContactImageAndName(&perPath, &perName);
     if (perPath) {
         CGFloat b = getPerContactBlur(perName, isDarkMode());
-        WAMLOG(@"[blur] per-contact path=%@ name='%@' blur=%.2f", perPath.lastPathComponent, perName, b);
         return b;
     }
     CGFloat g = getChatImageBlurAmount();
-    WAMLOG(@"[blur] global blur=%.2f (no per-contact path)", g);
     return g;
 }
 
@@ -5187,7 +5185,6 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
     }
 
     NSString *currentState = objc_getAssociatedObject(self.view, &kBgStateKey);
-    WAMLOG(@"[ucb] desired='%@' current='%@'", desiredState ?: @"(nil)", currentState ?: @"(nil)");
     UIView *existingBg = nil;
     for (UIView *sub in self.view.subviews) {
         if (sub.tag == 4321) { existingBg = sub; break; }
@@ -5466,7 +5463,185 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
 %end
 
+// Forward declarations (defined with the received blur helpers further down).
+static UIVisualEffectView *wamMakeBlurView(CGRect frame);
+static void wamStripEffectTint(UIVisualEffectView *v);
+
+// ----- Blur bubbles (sent, gradient-filled) -------------------------------------------
+// Sent text bubbles are CKTextBalloonView with no image; their fill+shape is drawn entirely
+// by a CKGradientView (the shape lives in a scaled sub-point image layer that renderInContext
+// can't reproduce). Received bubbles DO hand us the exact balloon shape image via setImage;
+// sent is that same shape mirrored. So we cache the received shape and reuse it (mirrored,
+// stretched) as the sent blur's mask — put a blur SIBLING behind the gradient (in the balloon)
+// masked to that shape + tinted, and fade the gradient with opacity=0 (render-only, no jitter).
+
+// The balloon shape asset (received orientation, resizable), captured from received bubbles.
+static UIImage *gWAMBalloonShape = nil;
+static int gWAMSentBlurCreates = 0;   // total sent-blur views created (leak detection)
+
+// The received blur's associated-object key (received blur is created in CKBalloonImageView
+// setImage). Declared here so the sent path can clean it up on cross-type cell reuse.
+static char kWAMBlurViewKey;
+
+// Marker set on every blur view we create (via wamMakeBlurView). Lets any cleanup path
+// positively identify OUR blur views among a balloon's subviews without depending on which
+// association key created it — used to strip leftovers on cell reuse in blur-OFF chats.
+static char kWAMIsOurBlurKey;
+
+static char kWAMSentBlurKey;    // UIVisualEffectView (on the balloon)
+static char kWAMSentTintKey;    // tint CALayer (on the balloon)
+static char kWAMSentMaskKey;    // mask CALayer (on the balloon)
+static char kWAMSentMaskSizeKey; // NSValue(CGSize) the mask was last rendered at (render cache)
+
+// Walk up to the CKColoredBalloonView and return its color (-99 if none found).
+static int wamGradientBalloonColor(UIView *g) {
+    UIView *p = g.superview; int lvl = 0;
+    while (p && lvl < 6) {
+        if ([p isKindOfClass:objc_getClass("CKColoredBalloonView")])
+            return (int)((CKColoredBalloonView *)p).color;
+        p = p.superview; lvl++;
+    }
+    return -99;
+}
+
+static void wamRemoveSentBlur(UIView *g) {
+    UIView *balloon = g.superview;
+    if (balloon) {
+        UIView *blur = objc_getAssociatedObject(balloon, &kWAMSentBlurKey);
+        if (blur) [blur removeFromSuperview];
+        objc_setAssociatedObject(balloon, &kWAMSentBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(balloon, &kWAMSentTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(balloon, &kWAMSentMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    // Restore the gradient and force it to rebuild its rounded shape (opacity alone can leave
+    // it square, since the shape wasn't re-rendered while faded at opacity 0).
+    if (g.layer.opacity < 1.0) {
+        g.layer.opacity = 1.0;
+        [g setNeedsLayout];
+        [g setNeedsDisplay];
+    }
+}
+
+// When Blur Bubbles is OFF for the current chat, a balloon recycled from a blur-ON chat can
+// still carry a leftover blur. A sent CKTextBalloonView has no image, so it never hits the
+// setImage cleanup path — the leftover just sits there as an overlay. This tears down any
+// blur on the balloon (received-keyed or otherwise). Only call it when blur is disabled, so
+// a legitimate active blur is never removed.
+static void wamClearForeignBlur(UIView *g) {
+    UIView *balloon = g.superview;
+    if (!balloon) return;
+    BOOL removedAny = NO;
+    for (UIView *sv in [balloon.subviews copy]) {
+        if ([sv isKindOfClass:[UIVisualEffectView class]] &&
+            objc_getAssociatedObject(sv, &kWAMIsOurBlurKey)) {
+            [sv removeFromSuperview];
+            removedAny = YES;
+        }
+    }
+    objc_setAssociatedObject(balloon, &kWAMBlurViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    static int fbl = 0;
+    if (removedAny && fbl < 40) {
+        fbl++;
+        WAMLOG(@"[fbl #%d] cleared foreign blur: balloon=%@ %p col=%d",
+            fbl, NSStringFromClass(balloon.class), balloon, wamGradientBalloonColor(g));
+    }
+}
+
 %hook CKGradientView
+
+// Drop a masked+tinted blur behind the gradient in the balloon, masked to the (mirrored)
+// balloon shape captured from received bubbles, then fade the gradient so the blur shows.
+%new
+- (void)wamApplySentBlur:(int)color {
+    UIView *balloon = self.superview;
+    if (!balloon) return;
+    CGRect b = self.bounds;
+    if (b.size.width <= 5 || b.size.height <= 5) return;
+
+    // Need the balloon shape asset (captured from a received bubble). Until we have it, leave
+    // the gradient visible so the bubble isn't blank.
+    UIImage *shapeAsset = gWAMBalloonShape;
+    if (!shapeAsset) { self.layer.opacity = 1.0; wamRemoveSentBlur(self); return; }
+
+    // Blur sibling behind the gradient.
+    UIVisualEffectView *blur = objc_getAssociatedObject(balloon, &kWAMSentBlurKey);
+    if (!blur) {
+        blur = wamMakeBlurView(self.frame);
+        blur.userInteractionEnabled = NO;
+        objc_setAssociatedObject(balloon, &kWAMSentBlurKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        CALayer *tint = [CALayer layer];
+        [blur.contentView.layer addSublayer:tint];
+        objc_setAssociatedObject(balloon, &kWAMSentTintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gWAMSentBlurCreates++;
+        static int bcl = 0;
+        if (bcl < 6) { bcl++; WAMLOG(@"[bcl #%d] sent-blur balloon class=%@ (grad super); gradClass=%@",
+            bcl, NSStringFromClass(balloon.class), NSStringFromClass(self.class)); }
+    }
+    // Re-assert parent + z-order every layout (cell reuse can move/reorder subviews).
+    [balloon insertSubview:blur belowSubview:self];
+
+    // Cross-type cell reuse: a balloon that previously held a RECEIVED blur (created in
+    // CKBalloonImageView setImage, keyed kWAMBlurViewKey) can be reused as a sent bubble.
+    // That old blur is never torn down by the sent path, so it stacks under ours as a
+    // second UIVisualEffectView (the "double overlay"). Remove any blur that isn't ours,
+    // and drop the received association so it isn't reused detached.
+    UIView *rblur = objc_getAssociatedObject(balloon, &kWAMBlurViewKey);
+    if (rblur && rblur != blur) {
+        [rblur removeFromSuperview];
+        objc_setAssociatedObject(balloon, &kWAMBlurViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    for (UIView *sv in [balloon.subviews copy]) {
+        if (sv != blur && [sv isKindOfClass:[UIVisualEffectView class]]) [sv removeFromSuperview];
+    }
+
+    wamStripEffectTint(blur);
+    UIColor *tc = (color == 0) ? getSMSSentBubbleColor() : getSentBubbleColor();
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    blur.frame = self.frame;   // gradient's frame in balloon coords
+
+    CALayer *tint = objc_getAssociatedObject(balloon, &kWAMSentTintKey);
+    tint.frame = blur.bounds;
+    tint.backgroundColor = tc.CGColor;
+
+    // Mask = the received balloon shape, stretched to this bubble's size and mirrored (sent
+    // tail faces right). Rendering the shape image is expensive (offscreen context + CGImage),
+    // and layoutSubviews fires every frame while scrolling — so cache the result by size and
+    // only re-render when the bubble's size actually changes. This is the scroll-jitter fix.
+    CALayer *mask = objc_getAssociatedObject(balloon, &kWAMSentMaskKey);
+    if (!mask) {
+        mask = [CALayer layer];
+        objc_setAssociatedObject(balloon, &kWAMSentMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSValue *cachedSize = objc_getAssociatedObject(balloon, &kWAMSentMaskSizeKey);
+    BOOL sizeChanged = !cachedSize || !CGSizeEqualToSize([cachedSize CGSizeValue], b.size);
+    if (sizeChanged || !mask.contents) {
+        UIImage *stretch = [shapeAsset resizableImageWithCapInsets:shapeAsset.capInsets
+                                                      resizingMode:UIImageResizingModeStretch];
+        UIGraphicsBeginImageContextWithOptions(b.size, NO, 0);
+        CGContextRef ctx = UIGraphicsGetCurrentContext();
+        CGContextTranslateCTM(ctx, b.size.width, 0);
+        CGContextScaleCTM(ctx, -1, 1);
+        [stretch drawInRect:CGRectMake(0, 0, b.size.width, b.size.height)];
+        UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+        mask.contents = (id)rendered.CGImage;
+        objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey,
+                                 [NSValue valueWithCGSize:b.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    mask.frame = blur.bounds;
+    blur.layer.mask = mask;
+    [CATransaction commit];
+
+    // Fade the gradient (render-only, no layout change) so the blur shows.
+    self.layer.opacity = 0.0;
+}
 
 - (void)layoutSubviews {
     %orig;
@@ -5488,21 +5663,24 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
         return;
     }
 
+    int col = wamGradientBalloonColor(self);
+
+    // Sent bubbles (iMessage=1, SMS=0) with Blur Bubbles: gradient-level masked blur.
+    if (isBlurBubblesEnabled() && (col == 1 || col == 0)) {
+        [self wamApplySentBlur:col];
+        return;
+    }
+    wamRemoveSentBlur(self);
+    // Blur OFF for this chat: also strip any leftover blur recycled in from a blur-ON chat
+    // (safe here because no blur should be active). Guarded so a live received blur in a
+    // blur-ON chat is never touched.
+    if (!isBlurBubblesEnabled()) wamClearForeignBlur(self);
+
     if (!isCustomBubbleColorsEnabled()) return;
 
-    UIColor *bubbleColor = getSentBubbleColor();
-    UIView *parent = self.superview;
-    while (parent) {
-        if ([parent isKindOfClass:objc_getClass("CKColoredBalloonView")]) {
-            CKColoredBalloonView *balloon = (CKColoredBalloonView *)parent;
-            if (balloon.color == -1) bubbleColor = getReceivedBubbleColor();
-            else if (balloon.color == 1) bubbleColor = getSentBubbleColor();
-            else if (balloon.color == 0) bubbleColor = getSMSSentBubbleColor();
-            break;
-        }
-        parent = parent.superview;
-    }
-
+    UIColor *bubbleColor = (col == 0) ? getSMSSentBubbleColor()
+                         : (col == -1) ? getReceivedBubbleColor()
+                         : getSentBubbleColor();
     [self setColors:@[bubbleColor, bubbleColor]];
 }
 
@@ -5522,21 +5700,33 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
         return;
     }
 
-    if (!isCustomBubbleColorsEnabled()) { %orig; return; }
+    int col = wamGradientBalloonColor(self);
 
-    UIColor *bubbleColor = getSentBubbleColor();
-    UIView *parent = self.superview;
-    while (parent) {
-        if ([parent isKindOfClass:objc_getClass("CKColoredBalloonView")]) {
-            CKColoredBalloonView *balloon = (CKColoredBalloonView *)parent;
-            if (balloon.color == -1) bubbleColor = getReceivedBubbleColor();
-            else if (balloon.color == 1) bubbleColor = getSentBubbleColor();
-            else if (balloon.color == 0) bubbleColor = getSMSSentBubbleColor();
-            break;
-        }
-        parent = parent.superview;
+    // Sent + blur: layoutSubviews owns the blur. Color the gradient normally, but if the blur
+    // already exists keep the gradient faded here too (setColors runs without a re-layout, and
+    // the system can otherwise re-show it over the blur = double).
+    if (isBlurBubblesEnabled() && (col == 1 || col == 0)) {
+        UIColor *sc = (col == 0) ? getSMSSentBubbleColor() : getSentBubbleColor();
+        %orig(@[sc, sc]);
+        if (self.superview && objc_getAssociatedObject(self.superview, &kWAMSentBlurKey))
+            self.layer.opacity = 0.0;
+        return;
     }
 
+    // Not a blurred sent bubble. This gradient may have been recycled from a sent+blur bubble
+    // in a blur-ON chat — in which case it's still faded (opacity 0) with its old sent blur
+    // attached, and setColors can run on reuse WITHOUT a layoutSubviews pass. Undo that here so
+    // the recycled bubble (now e.g. a received message) doesn't show the stale red sent blur.
+    if (self.superview && objc_getAssociatedObject(self.superview, &kWAMSentBlurKey)) {
+        wamRemoveSentBlur(self);   // removes the sent blur + restores opacity to 1
+    }
+    if (!isBlurBubblesEnabled()) wamClearForeignBlur(self);
+
+    if (!isCustomBubbleColorsEnabled()) { %orig; return; }
+
+    UIColor *bubbleColor = (col == 0) ? getSMSSentBubbleColor()
+                         : (col == -1) ? getReceivedBubbleColor()
+                         : getSentBubbleColor();
     %orig(@[bubbleColor, bubbleColor]);
 }
 
@@ -5578,11 +5768,14 @@ static UIImage *wamTintBalloonImage(UIImage *image, UIColor *targetColor, BOOL a
 // mirror. The material's own tint subview (_UIVisualEffectSubview) is removed so the blur
 // doesn't darken/lighten; the bubble color is applied as our own tint instead.
 
-static char kWAMBlurViewKey;
+// kWAMBlurViewKey is declared earlier (above the CKGradientView hook) so the sent path
+// can clean up a stale received blur on cross-type cell reuse.
 static char kWAMBlurTintKey;
 static char kWAMBlurMaskKey;      // CALayer used as blur.layer.mask
 static char kWAMBlurShapeKey;     // the balloon shape image (resizable)
 static char kWAMBlurTintColorKey; // resolved bubble/reaction color for the tint
+static char kWAMBlurMirrorKey;    // @YES to horizontally mirror the mask (sent iMessage)
+static char kWAMBlurMaskSizeKey;  // NSValue(CGSize) the mask was last rendered at (render cache)
 
 // A fully-transparent stand-in with the EXACT geometry the solid tint path (wamTintBalloonImage)
 // produces — same cap insets, alignment rect insets (incl. the received +6/-8 adjustment) and
@@ -5627,13 +5820,44 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
     UIBlurEffect *eff = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
     UIVisualEffectView *vev = [[UIVisualEffectView alloc] initWithEffect:eff];
     vev.frame = frame;
+    objc_setAssociatedObject(vev, &kWAMIsOurBlurKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return vev;
+}
+
+// Remove every blur view WE created that is a subview of `balloon` (identified by the marker
+// set in wamMakeBlurView), and clear our sent/received associations on it. Safe to call in a
+// blur-OFF context: it never touches a system UIVisualEffectView, only our tagged ones. This
+// is the catch-all for leftovers recycled in from a blur-ON chat, regardless of which balloon
+// class or which association created the blur.
+static void wamStripOurBlurs(UIView *balloon) {
+    if (!balloon) return;
+    for (UIView *sv in [balloon.subviews copy]) {
+        if ([sv isKindOfClass:[UIVisualEffectView class]] &&
+            objc_getAssociatedObject(sv, &kWAMIsOurBlurKey)) {
+            [sv removeFromSuperview];
+        }
+    }
+    objc_setAssociatedObject(balloon, &kWAMBlurViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Un-fade any gradient child our sent path faded (opacity 0). Just restoring opacity isn't
+    // enough: while faded, its rounded balloon shape wasn't re-rendered, so it comes back as a
+    // square. Force a layout+display pass so it rebuilds its shape/fill.
+    for (UIView *sv in balloon.subviews) {
+        if ([sv isKindOfClass:objc_getClass("CKGradientView")]) {
+            sv.layer.opacity = 1.0;
+            [sv setNeedsLayout];
+            [sv setNeedsDisplay];
+        }
+    }
 }
 
 %hook CKBalloonImageView
 
 %new
-- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor {
+- (void)wamApplyReceivedBlurWithImage:(UIImage *)shape tintColor:(UIColor *)tintColor mirror:(BOOL)mirror {
     UIVisualEffectView *blur = objc_getAssociatedObject(self, &kWAMBlurViewKey);
     if (!blur) {
         blur = wamMakeBlurView(self.bounds);
@@ -5648,6 +5872,18 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
     }
     objc_setAssociatedObject(self, &kWAMBlurShapeKey, shape, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kWAMBlurTintColorKey, tintColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurMirrorKey, @(mirror), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Shape/mirror may have changed (cell reuse) — force the mask to re-render next layout.
+    objc_setAssociatedObject(self, &kWAMBlurMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Symmetric to the sent path: if this balloon was previously a SENT bubble it may still
+    // carry a sent blur (kWAMSentBlurKey) that would stack under ours. Tear it down.
+    UIView *sblur = objc_getAssociatedObject(self, &kWAMSentBlurKey);
+    if (sblur && sblur != blur) {
+        [sblur removeFromSuperview];
+        objc_setAssociatedObject(self, &kWAMSentBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     [self wamLayoutBlurBubble];
 }
 
@@ -5679,14 +5915,27 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
         mask = [CALayer layer];
         objc_setAssociatedObject(self, &kWAMBlurMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (shape) {
+    // Rendering the shape is expensive and layoutSubviews fires every frame while scrolling,
+    // so only re-render when the bubble size changes (the mask depends on size + shape/mirror,
+    // and shape/mirror are refreshed via kWAMBlurMaskSizeKey being cleared in the apply path).
+    NSValue *cachedSize = objc_getAssociatedObject(self, &kWAMBlurMaskSizeKey);
+    BOOL sizeChanged = !cachedSize || !CGSizeEqualToSize([cachedSize CGSizeValue], b.size);
+    if (shape && (sizeChanged || !mask.contents)) {
+        BOOL mirror = [objc_getAssociatedObject(self, &kWAMBlurMirrorKey) boolValue];
         UIImage *stretch = [shape resizableImageWithCapInsets:shape.capInsets
                                                  resizingMode:UIImageResizingModeStretch];
         UIGraphicsBeginImageContextWithOptions(b.size, NO, 0);
+        CGContextRef ctx = UIGraphicsGetCurrentContext();
+        if (mirror) {   // sent iMessage: the asset is the received (left-tailed) shape
+            CGContextTranslateCTM(ctx, b.size.width, 0);
+            CGContextScaleCTM(ctx, -1, 1);
+        }
         [stretch drawInRect:CGRectMake(0, 0, b.size.width, b.size.height)];
         UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
         UIGraphicsEndImageContext();
         mask.contents = (id)rendered.CGImage;
+        objc_setAssociatedObject(self, &kWAMBlurMaskSizeKey,
+                                 [NSValue valueWithCGSize:b.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     mask.frame = b;
     blur.layer.mask = mask;
@@ -5703,6 +5952,8 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
     objc_setAssociatedObject(self, &kWAMBlurMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kWAMBlurShapeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(self, &kWAMBlurTintColorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurMirrorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(self, &kWAMBlurMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 - (void)setImage:(UIImage *)image {
@@ -5721,17 +5972,22 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
         CKColoredBalloonView *coloredSelf = (CKColoredBalloonView *)self;
 
         // Blur applies to received bubbles and reaction (acknowledgment) balloons.
+        // Blur applies to received bubbles + reactions here; sent bubbles are gradient-filled
+        // and handled in the CKGradientView hook instead.
         if (blurEnabled) {
             if (isInsideReaction) {
                 UIColor *rc = hasReactionBalloonOverride
                     ? getChatAdvancedTintColorForView(@"advancedReactionBalloonColor", @"advancedReactionBalloonColorDark", nil, self)
                     : getReceivedBubbleColor();
-                [self wamApplyReceivedBlurWithImage:image tintColor:rc];
+                [self wamApplyReceivedBlurWithImage:image tintColor:rc mirror:NO];
                 %orig(wamClearImageLike(image, NO));   // reaction geometry: no received inset shift
                 return;
             }
             if (coloredSelf.color == -1) {
-                [self wamApplyReceivedBlurWithImage:image tintColor:getReceivedBubbleColor()];
+                // Cache the balloon shape asset — sent bubbles (which have no image) reuse it,
+                // mirrored, for their blur mask.
+                if (!gWAMBalloonShape && image.capInsets.left > 0.5) gWAMBalloonShape = image;
+                [self wamApplyReceivedBlurWithImage:image tintColor:getReceivedBubbleColor() mirror:NO];
                 %orig(wamClearImageLike(image, YES));
                 return;
             }
@@ -5765,6 +6021,27 @@ static UIVisualEffectView *wamMakeBlurView(CGRect frame) {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
+    // Blur OFF for this chat: this balloon (sent OR received) may still carry a blur recycled
+    // in from a blur-ON chat. setImage/setColors/gradient-layout aren't guaranteed to fire on
+    // reuse, but the balloon's OWN layoutSubviews does — so strip any of our tagged blurs here
+    // (sent-keyed red leftover included) and un-fade the gradient. This is the reliable point.
+    if (!isBlurBubblesEnabled()) {
+        BOOL hadOurBlur = NO;
+        for (UIView *sv in self.subviews) {
+            if ([sv isKindOfClass:[UIVisualEffectView class]] &&
+                objc_getAssociatedObject(sv, &kWAMIsOurBlurKey)) { hadOurBlur = YES; break; }
+        }
+        if (hadOurBlur || objc_getAssociatedObject(self, &kWAMBlurViewKey) ||
+            objc_getAssociatedObject(self, &kWAMSentBlurKey)) {
+            wamStripOurBlurs(self);
+            static int sob = 0;
+            if (sob < 40) { sob++; WAMLOG(@"[sob #%d] stripped leftover blur off %@ %p",
+                sob, NSStringFromClass(self.class), self); }
+        }
+        return;
+    }
+
     if (objc_getAssociatedObject(self, &kWAMBlurViewKey)) {
         [self wamLayoutBlurBubble];
     }
@@ -9784,10 +10061,12 @@ static char kWAMPickerBlursKey;
         objc_setAssociatedObject(self, &kWAMPickerBlursKey, blurs, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // The picker's own background layers (exclude the backing layers of our blur views).
+    // The picker's own background layers (exclude the backing layers of our blur views, and
+    // the hidden tail dots).
     NSMutableArray<CALayer *> *bgLayers = [NSMutableArray array];
     for (CALayer *l in self.layer.sublayers) {
         if ([l.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        if (l.hidden) continue;
         [bgLayers addObject:l];
     }
 
@@ -9810,6 +10089,15 @@ static char kWAMPickerBlursKey;
         bv.layer.cornerRadius = l.cornerRadius;
         bv.clipsToBounds = YES;
         [self sendSubviewToBack:bv];
+
+        // Follow the pill's open/close animation so the blur grows with the colored tint
+        // instead of snapping straight to full size.
+        for (NSString *key in @[@"position", @"bounds", @"cornerRadius"]) {
+            CAAnimation *a = [l animationForKey:key];
+            NSString *k = [@"wam_" stringByAppendingString:key];
+            if (a) [bv.layer addAnimation:[a copy] forKey:k];
+            else [bv.layer removeAnimationForKey:k];
+        }
     }
 }
 
@@ -9820,9 +10108,27 @@ static char kWAMPickerBlursKey;
     objc_setAssociatedObject(self, &kWAMPickerBlursKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+// Hide the picker's trailing tail dots (the small connector circles that can overlap the
+// message and look messy) — keep only the main pill (the layer with the largest radius).
+%new
+- (void)wamHidePickerTail {
+    CALayer *pill = nil;
+    CGFloat maxR = -1;
+    for (CALayer *l in self.layer.sublayers) {
+        if ([l.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        if (l.cornerRadius > maxR) { maxR = l.cornerRadius; pill = l; }
+    }
+    for (CALayer *l in self.layer.sublayers) {
+        if ([l.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        l.hidden = (l != pill);
+    }
+}
+
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
+    [self wamHidePickerTail];
 
     BOOL blurEnabled = isBlurBubblesEnabled();
     if (blurEnabled) [self wamApplyPickerBlur];
@@ -9833,6 +10139,7 @@ static char kWAMPickerBlursKey;
     if (!customColor) return;
     for (CALayer *sublayer in self.layer.sublayers) {
         if ([sublayer.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        if (sublayer.hidden) continue;
         sublayer.backgroundColor = customColor.CGColor;
     }
 }
@@ -9840,6 +10147,9 @@ static char kWAMPickerBlursKey;
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled() || !self.window) return;
+
+    [self wamHidePickerTail];
+
     BOOL blurEnabled = isBlurBubblesEnabled();
     if (blurEnabled) [self wamApplyPickerBlur];
     if (!isCustomBubbleColorsEnabled() && !blurEnabled) return;
@@ -9847,6 +10157,7 @@ static char kWAMPickerBlursKey;
     if (!customColor) return;
     for (CALayer *sublayer in self.layer.sublayers) {
         if ([sublayer.delegate isKindOfClass:[UIVisualEffectView class]]) continue;
+        if (sublayer.hidden) continue;
         sublayer.backgroundColor = customColor.CGColor;
     }
 }

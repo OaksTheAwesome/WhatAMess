@@ -21,7 +21,8 @@ Here be dragons!*/
 #define kPrefsPlistPathRootless @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kPrefsPlistPathRootfull  @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 
-static void logToFile(NSString *message) {
+// Kept around (unused) so diagnostics can be re-enabled quickly via WAMLOG when debugging.
+__attribute__((unused)) static void logToFile(NSString *message) {
     NSString *log = [NSString stringWithFormat:@"%@\n", message];
     NSString *path = @"/var/jb/var/mobile/Library/WhatAMess.log";
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
@@ -34,26 +35,6 @@ static void logToFile(NSString *message) {
     }
 }
 #define WAMLOG(fmt, ...) logToFile([NSString stringWithFormat:@"[%@] " fmt, [NSDate date], ##__VA_ARGS__])
-
-static void wamHit(const char *name) {
-    static NSMutableDictionary *counts = nil;
-    static NSTimeInterval lastFlush = 0;
-    if (!counts) counts = [NSMutableDictionary new];
-    NSString *k = [NSString stringWithUTF8String:name];
-    counts[k] = @([counts[k] integerValue] + 1);
-    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-    if (lastFlush == 0) { lastFlush = now; return; }
-    if (now - lastFlush >= 1.0) {
-        NSMutableString *s = [NSMutableString string];
-        NSArray *sortedKeys = [counts.allKeys sortedArrayUsingSelector:@selector(compare:)];
-        for (NSString *kk in sortedKeys) {
-            [s appendFormat:@"%@=%@ ", kk, counts[kk]];
-        }
-        WAMLOG(@"[hits/1s] %@", s);
-        [counts removeAllObjects];
-        lastFlush = now;
-    }
-}
 
 
 BOOL isDarkMode();
@@ -109,7 +90,9 @@ static void wamLoadLastChatNameAtStartup(void) {
     if (name.length) {
         gWAMCurrentContactName = [name copy];
         gWAMCurrentContactDisplayName = [name copy];
-        gWAMActiveChatName = [name copy];
+        // Do NOT seed gWAMActiveChatName here — it's the persisted PREVIOUS chat and, being updated
+        // only on conversation change, would linger and leak its per-contact background into a chat
+        // opened from a notification on cold launch. The live resolver fills in the real chat.
         gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
         gWAMLastPersistedChatName = [name copy];
     }
@@ -311,6 +294,12 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     }
 }
 
+// Self-heal: force a rebuild of any sent-bubble blur in the subtree that isn't currently valid for
+// the visible conversation (missing / hidden / stale generation / purged mask). Defined after the
+// blur machinery; forward-declared here so the heartbeat can call it. This is what makes the blur
+// reliable on resume / first-open regardless of whether iMessage re-lays-out the cells.
+static void wamHealBlursInView(UIView *root);
+
 @interface WAMHeartbeatTarget : NSObject
 + (instancetype)shared;
 - (void)tick;
@@ -352,6 +341,15 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
             }
         }
     }
+
+    // Throttled blur self-heal (~every 9 frames). Rebuilds any sent-bubble blur that isn't valid
+    // for the visible conversation. Cheap when everything is already good; this is what makes the
+    // blur reliable on resume / first-open / stragglers where iMessage doesn't re-lay-out cells.
+    if (foundCtrl && foundCtrl.isViewLoaded) {
+        static int healTick = 0;
+        if (++healTick >= 9) { healTick = 0; wamHealBlursInView(foundCtrl.view); }
+    }
+
     id conv = nil;
     NSString *convSource = @"none";
     if (foundCtrl) {
@@ -555,11 +553,8 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
 
     static BOOL prevChatActive = NO;
     BOOL stateChanged = (chatIsActiveSurface != prevChatActive);
-    if (stateChanged) {
-        WAMLOG(@"[surface] active=%d (chatIsVisible=%d listInWindow=%d topVC='%@' conv=%p)",
-            chatIsActiveSurface, chatIsVisible, listInWindow, topVCClass, conv);
-    }
     prevChatActive = chatIsActiveSurface;
+
     if (chatIsActiveSurface) {
         BOOL wasActive = gWAMChatIsActiveSurface;
         gWAMChatIsActiveSurface = YES;
@@ -1038,7 +1033,10 @@ static void wamResolvePerContactImageAndName(NSString **outPath, NSString **outN
     add(gWAMTriggerNameOverride);
     add(gWAMCurrentContactName);
     add(gWAMCurrentContactDisplayName);
-    add(gWAMActiveChatName);
+    // NOTE: gWAMActiveChatName is deliberately NOT a candidate. It's set only on conversation
+    // change (and seeded from the persisted last-chat name at cold launch), so it lingers as the
+    // PREVIOUS chat's name — which leaked its per-contact background into a chat opened via
+    // notification. gWAMCurrentContactName (re-resolved live) already covers the current chat.
     if (!candidates.count) return;
 
     BOOL dark = isDarkMode();
@@ -1486,6 +1484,33 @@ static BOOL wamIsInsideReactionContext(UIView *view, int maxHops) {
             (C && [p isKindOfClass:C]) || (D && [p isKindOfClass:D])) return YES;
         p = p.superview;
         hops++;
+    }
+    return NO;
+}
+
+// Walk up to a CKHyperlinkBalloonView (link-preview bubble). Link bubbles are gradient-filled
+// like sent text bubbles, but the preview content (LPFlippedView) sits on top of the fill.
+static BOOL wamIsInsideHyperlinkBalloon(UIView *view, int maxHops) {
+    Class H = NSClassFromString(@"CKHyperlinkBalloonView");
+    if (!H) return NO;
+    UIView *p = view ? view.superview : nil;
+    int hops = 0;
+    while (p && hops < maxHops) {
+        if ([p isKindOfClass:H]) return YES;
+        p = p.superview;
+        hops++;
+    }
+    return NO;
+}
+
+// YES if the view lives in the conversation list or the pinned-conversations grid (not a chat
+// transcript). Used to keep the typing-indicator blur to in-chat only.
+static BOOL wamViewInNonChatContext(UIView *v) {
+    UIView *p = v ? v.superview : nil; int hops = 0;
+    while (p && hops < 20) {
+        NSString *c = NSStringFromClass(p.class);
+        if ([c containsString:@"ConversationList"] || [c containsString:@"PinnedConversation"]) return YES;
+        p = p.superview; hops++;
     }
     return NO;
 }
@@ -4078,7 +4103,6 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 - (void)setText:(NSString *)text {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("CKLabel.setText");
 
     NSString *chatName = gWAMCurrentContactName;
     BOOL nameMatch = NO;
@@ -4373,7 +4397,6 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("_UIBarBackground.layout");
 
     static const char kHasContactCacheKey = 0;
     static const char kHasContactTimeKey = 0;
@@ -5068,6 +5091,34 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 
 %end
 
+// Bumped on every conversation change. A sent blur records the generation it was built in; if it
+// no longer matches, the blur belongs to a PREVIOUS chat and is treated as not-live (the gradient
+// falls back to this chat's solid color) until it's rebuilt for the current conversation. This is
+// how a recycled/lingering balloon can never present another chat's blurred bubble.
+static int gWAMChatGeneration = 0;
+
+// Bumped on app-resume, memory-warning, and every chat (re)open. Blur masks are cached CGImages
+// whose backing iOS purges when backgrounded / under memory pressure — a purged mask leaves the
+// wrapper non-nil but empty, so the blur renders as a full SQUARE. A balloon stores the generation
+// its mask was rendered at; if it differs, the mask is re-rendered fresh even at the same size.
+static int gWAMMaskGeneration = 0;
+
+// Force every CKGradientView in a subtree to re-run layout (→ wamApplySentBlur), so visible sent
+// bubbles rebuild their blur for the current conversation instead of sitting on the solid fallback.
+static void wamRelayoutGradients(UIView *root) {
+    if (!root) return;
+    Class gv = objc_getClass("CKGradientView");
+    if (!gv) return;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+    int guard = 0;
+    while (stack.count && guard < 3000) {
+        guard++;
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:gv]) [v setNeedsLayout];
+        for (UIView *sv in v.subviews) [stack addObject:sv];
+    }
+}
+
 %hook CKMessagesController
 
 -(void)viewDidLoad {
@@ -5092,6 +5143,7 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 -(void)handleAppDidBecomeActiveForBg {
     if (!isTweakEnabled()) return;
     [self wamRefreshChatBackgroundWithSelfContext];
+    [self wamRevalidateBlurs];   // resume: rebuild blurs (masks purged while backgrounded → square)
 }
 
 %new
@@ -5280,15 +5332,41 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
 }
 
 - (void)setCurrentConversation:(id)conversation {
+    gWAMChatGeneration++;   // bump BEFORE %orig so the new chat's layout stamps the new generation
     %orig;
-    if (!conversation) gWAMActiveChatName = nil;
+    [self wamRevalidateBlurs];
+    // Clear the stale active-chat name so the PREVIOUS chat's per-contact background can't leak in;
+    // wamHandleConversationChanged re-sets it for this chat if its name resolves.
+    gWAMActiveChatName = nil;
     [self wamHandleConversationChanged:conversation];
 }
 
 - (void)_setCurrentConversation:(id)conversation {
+    gWAMChatGeneration++;
     %orig;
-    if (!conversation) gWAMActiveChatName = nil;
+    [self wamRevalidateBlurs];
+    gWAMActiveChatName = nil;
     [self wamHandleConversationChanged:conversation];
+}
+
+// Rebuild sent-bubble blurs for the current conversation. Runs immediately AND a few times shortly
+// after, because on first-open the transcript loads async (nothing to relayout yet) and on resume
+// there's no conversation change to trigger it — which is why bubbles could be left un-blurred /
+// square / a mix until you left and came back.
+%new
+- (void)wamRevalidateBlurs {
+    if (!isTweakEnabled() || !self.isViewLoaded) return;
+    // Force masks to re-render fresh on this (re)open — covers the notification-tap path where the
+    // mask backing was purged but no resume/memory event bumped the generation, leaving squares.
+    gWAMMaskGeneration++;
+    wamRelayoutGradients(self.view);
+    __weak CKMessagesController *weakSelf = self;
+    for (CGFloat delay = 0.15; delay <= 0.6; delay += 0.15) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (weakSelf.isViewLoaded) wamRelayoutGradients(weakSelf.view);
+        });
+    }
 }
 
 %new
@@ -5318,7 +5396,15 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
         NSString *c = [chat performSelector:@selector(chatIdentifier)];
         if ([c isKindOfClass:[NSString class]] && c.length) cid = c;
     }
-    if (!name.length) return;
+    if (!name.length) {
+        // New conversation whose name isn't resolvable yet — clear stale names so the previous
+        // chat's per-contact image/colors don't leak; refresh to drop any leftover background.
+        gWAMCurrentContactName = nil;
+        gWAMCurrentContactDisplayName = nil;
+        gWAMActiveChatName = nil;
+        [self updateChatBackground];
+        return;
+    }
     if (cid.length) wamReconcileAliasForChat(cid, name);
     gWAMCurrentContactName = [name copy];
     gWAMCurrentContactDisplayName = [name copy];
@@ -5440,6 +5526,7 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
     if (!isTweakEnabled()) return;
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
     [self wamRetryBgRefresh:0];
+    [self wamRevalidateBlurs];   // first-open: transcript is loaded now, rebuild any missing blurs
 }
 
 %new
@@ -5490,8 +5577,12 @@ static char kWAMIsOurBlurKey;
 
 static char kWAMSentBlurKey;    // UIVisualEffectView (on the balloon)
 static char kWAMSentTintKey;    // tint CALayer (on the balloon)
-static char kWAMSentMaskKey;    // mask CALayer (on the balloon)
-static char kWAMSentMaskSizeKey; // NSValue(CGSize) the mask was last rendered at (render cache)
+static char kWAMSentMaskKey;    // (legacy) mask CALayer key — cleared on teardown paths
+static char kWAMSentMaskSizeKey; // (legacy) mask size cache key — cleared on teardown paths
+static char kWAMSentBlurConvKey; // NSNumber(int) conversation generation this blur was built in
+
+static char kWAMLinkBlurKey;    // rich link-preview blur (on the RichLinkView)
+static char kWAMTypingBlurKey;  // typing-indicator blur (on the CKTypingView)
 
 // Walk up to the CKColoredBalloonView and return its color (-99 if none found).
 static int wamGradientBalloonColor(UIView *g) {
@@ -5502,6 +5593,75 @@ static int wamGradientBalloonColor(UIView *g) {
         p = p.superview; lvl++;
     }
     return -99;
+}
+
+// Is the balloon's sent blur valid to present right now: it exists, is shown, is still ours, was
+// built for the CURRENT conversation, and its mask isn't purged (stale mask generation). Anything
+// else means the gradient should fall back to a solid fill and/or be rebuilt.
+static BOOL wamSentBlurIsGood(UIView *balloon) {
+    if (!balloon) return NO;
+    UIView *b = objc_getAssociatedObject(balloon, &kWAMSentBlurKey);
+    if (![b isKindOfClass:[UIView class]] || b.hidden || b.superview != balloon) return NO;
+    if ([objc_getAssociatedObject(balloon, &kWAMSentBlurConvKey) intValue] != gWAMChatGeneration) return NO;
+    return YES;
+}
+
+// The actual iMessage balloon outline as a vector path (fixed corner radius ~17 + the real tail
+// curves), sized to `size`. Straight edges stretch for any bubble size. Reference path has the tail
+// at the bottom-LEFT (received); mirror it for the sent tail (bottom-right). Used as a CAShapeLayer
+// mask so CoreAnimation re-rasterizes from the path — it can never become a square like an image.
+static UIBezierPath *wamBubbleMaskPath(CGSize size, BOOL tailRight, BOOL hasTail) {
+    CGFloat w = size.width, h = size.height;
+    // Middle-of-group bubbles have no tail (iMessage only tails the last in a run). The bounds still
+    // reserve the tail's width on the sender's side, so a plain rounded rect at full width bulges
+    // past the tailed body edge. Inset that side by the tail reserve so it lines up with the body.
+    if (!hasTail) {
+        CGFloat r = MIN(17.0, h / 2.0);
+        CGFloat tail = 4.0;   // body edge is inset ~4pt from the bounds on the tail side
+        CGRect body = tailRight ? CGRectMake(0, 0, w - tail, h) : CGRectMake(tail, 0, w - tail, h);
+        return [UIBezierPath bezierPathWithRoundedRect:body cornerRadius:r];
+    }
+    UIBezierPath *p = [UIBezierPath bezierPath];
+    [p moveToPoint:CGPointMake(22, h)];
+    [p addLineToPoint:CGPointMake(w - 17, h)];
+    [p addCurveToPoint:CGPointMake(w, h - 17) controlPoint1:CGPointMake(w - 7.61, h)  controlPoint2:CGPointMake(w, h - 7.61)];
+    [p addLineToPoint:CGPointMake(w, 17)];
+    [p addCurveToPoint:CGPointMake(w - 17, 0)  controlPoint1:CGPointMake(w, 7.61)      controlPoint2:CGPointMake(w - 7.61, 0)];
+    [p addLineToPoint:CGPointMake(21, 0)];
+    [p addCurveToPoint:CGPointMake(4, 17)      controlPoint1:CGPointMake(11.61, 0)     controlPoint2:CGPointMake(4, 7.61)];
+    [p addLineToPoint:CGPointMake(4, h - 11)];
+    [p addCurveToPoint:CGPointMake(0, h)       controlPoint1:CGPointMake(4, h - 1)     controlPoint2:CGPointMake(0, h)];
+    [p addLineToPoint:CGPointMake(-0.05, h - 0.01)];
+    [p addCurveToPoint:CGPointMake(11.04, h - 4.04) controlPoint1:CGPointMake(4.07, h + 0.43) controlPoint2:CGPointMake(8.16, h - 1.06)];
+    [p addCurveToPoint:CGPointMake(22, h)      controlPoint1:CGPointMake(16, h)        controlPoint2:CGPointMake(19, h)];
+    [p closePath];
+    if (tailRight) {   // reflect around x = w/2 → tail on the right (sent)
+        [p applyTransform:CGAffineTransformMakeScale(-1, 1)];
+        [p applyTransform:CGAffineTransformMakeTranslation(w, 0)];
+    }
+    return p;
+}
+
+
+static void wamHealBlursInView(UIView *root) {
+    if (!root || !isBlurBubblesEnabled()) return;
+    Class gvCls = objc_getClass("CKGradientView");
+    if (!gvCls) return;
+    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+    int guard = 0;
+    while (stack.count && guard < 4000) {
+        guard++;
+        UIView *v = stack.lastObject; [stack removeLastObject];
+        if ([v isKindOfClass:gvCls]) {
+            int col = wamGradientBalloonColor(v);
+            BOOL isLink = wamIsInsideHyperlinkBalloon(v, 6);
+            // Only sent bubbles (and received link previews) get a gradient-level blur.
+            if ((col == 1 || col == 0 || (isLink && col == -1)) && !wamSentBlurIsGood(v.superview)) {
+                [v setNeedsLayout];   // → CKGradientView layoutSubviews → wamApplySentBlur rebuilds it
+            }
+        }
+        for (UIView *sv in v.subviews) [stack addObject:sv];
+    }
 }
 
 static void wamRemoveSentBlur(UIView *g) {
@@ -5531,12 +5691,10 @@ static void wamRemoveSentBlur(UIView *g) {
 static void wamClearForeignBlur(UIView *g) {
     UIView *balloon = g.superview;
     if (!balloon) return;
-    BOOL removedAny = NO;
     for (UIView *sv in [balloon.subviews copy]) {
         if ([sv isKindOfClass:[UIVisualEffectView class]] &&
             objc_getAssociatedObject(sv, &kWAMIsOurBlurKey)) {
             [sv removeFromSuperview];
-            removedAny = YES;
         }
     }
     objc_setAssociatedObject(balloon, &kWAMBlurViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -5544,12 +5702,6 @@ static void wamClearForeignBlur(UIView *g) {
     objc_setAssociatedObject(balloon, &kWAMSentTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(balloon, &kWAMSentMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    static int fbl = 0;
-    if (removedAny && fbl < 40) {
-        fbl++;
-        WAMLOG(@"[fbl #%d] cleared foreign blur: balloon=%@ %p col=%d",
-            fbl, NSStringFromClass(balloon.class), balloon, wamGradientBalloonColor(g));
-    }
 }
 
 %hook CKGradientView
@@ -5563,24 +5715,17 @@ static void wamClearForeignBlur(UIView *g) {
     CGRect b = self.bounds;
     if (b.size.width <= 5 || b.size.height <= 5) return;
 
-    // Need the balloon shape asset (captured from a received bubble). Until we have it, leave
-    // the gradient visible so the bubble isn't blank.
-    UIImage *shapeAsset = gWAMBalloonShape;
-    if (!shapeAsset) { self.layer.opacity = 1.0; wamRemoveSentBlur(self); return; }
-
     // Blur sibling behind the gradient.
     UIVisualEffectView *blur = objc_getAssociatedObject(balloon, &kWAMSentBlurKey);
     if (!blur) {
         blur = wamMakeBlurView(self.frame);
         blur.userInteractionEnabled = NO;
+        blur.hidden = YES;        // stay hidden until stripped+tinted below (no black flash)
         objc_setAssociatedObject(balloon, &kWAMSentBlurKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         CALayer *tint = [CALayer layer];
         [blur.contentView.layer addSublayer:tint];
         objc_setAssociatedObject(balloon, &kWAMSentTintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         gWAMSentBlurCreates++;
-        static int bcl = 0;
-        if (bcl < 6) { bcl++; WAMLOG(@"[bcl #%d] sent-blur balloon class=%@ (grad super); gradClass=%@",
-            bcl, NSStringFromClass(balloon.class), NSStringFromClass(self.class)); }
     }
     // Re-assert parent + z-order every layout (cell reuse can move/reorder subviews).
     [balloon insertSubview:blur belowSubview:self];
@@ -5600,7 +5745,9 @@ static void wamClearForeignBlur(UIView *g) {
     }
 
     wamStripEffectTint(blur);
-    UIColor *tc = (color == 0) ? getSMSSentBubbleColor() : getSentBubbleColor();
+    UIColor *tc = (color == 0)  ? getSMSSentBubbleColor()
+                : (color == -1) ? getReceivedBubbleColor()   // received link-preview bubbles
+                                : getSentBubbleColor();
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -5610,37 +5757,37 @@ static void wamClearForeignBlur(UIView *g) {
     tint.frame = blur.bounds;
     tint.backgroundColor = tc.CGColor;
 
-    // Mask = the received balloon shape, stretched to this bubble's size and mirrored (sent
-    // tail faces right). Rendering the shape image is expensive (offscreen context + CGImage),
-    // and layoutSubviews fires every frame while scrolling — so cache the result by size and
-    // only re-render when the bubble's size actually changes. This is the scroll-jitter fix.
-    CALayer *mask = objc_getAssociatedObject(balloon, &kWAMSentMaskKey);
-    if (!mask) {
-        mask = [CALayer layer];
+    // Mask to the iMessage balloon outline via a vector CAShapeLayer — it re-rasterizes from the
+    // path, so it can never be dropped to an empty/square bitmap the way an image mask can (that was
+    // the recurring square on resume / cold-launch / notification). Tail faces right for sent
+    // (col 1/0), left for received link previews (col -1).
+    CAShapeLayer *mask = objc_getAssociatedObject(balloon, &kWAMSentMaskKey);
+    if (![mask isKindOfClass:[CAShapeLayer class]]) {
+        mask = [CAShapeLayer layer];
         objc_setAssociatedObject(balloon, &kWAMSentMaskKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    NSValue *cachedSize = objc_getAssociatedObject(balloon, &kWAMSentMaskSizeKey);
-    BOOL sizeChanged = !cachedSize || !CGSizeEqualToSize([cachedSize CGSizeValue], b.size);
-    if (sizeChanged || !mask.contents) {
-        UIImage *stretch = [shapeAsset resizableImageWithCapInsets:shapeAsset.capInsets
-                                                      resizingMode:UIImageResizingModeStretch];
-        UIGraphicsBeginImageContextWithOptions(b.size, NO, 0);
-        CGContextRef ctx = UIGraphicsGetCurrentContext();
-        CGContextTranslateCTM(ctx, b.size.width, 0);
-        CGContextScaleCTM(ctx, -1, 1);
-        [stretch drawInRect:CGRectMake(0, 0, b.size.width, b.size.height)];
-        UIImage *rendered = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-        mask.contents = (id)rendered.CGImage;
-        objc_setAssociatedObject(balloon, &kWAMSentMaskSizeKey,
-                                 [NSValue valueWithCGSize:b.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
     mask.frame = blur.bounds;
+    // iMessage tails only the last bubble of a consecutive run — mirror that via CKBalloonView's
+    // own _hasTail flag (default to tailed if it can't be read).
+    BOOL hasTail = YES;
+    @try { id v = [balloon valueForKey:@"_hasTail"]; if (v) hasTail = [v boolValue]; } @catch (__unused NSException *e) {}
+    mask.path = wamBubbleMaskPath(b.size, color != -1, hasTail).CGPath;
     blur.layer.mask = mask;
     [CATransaction commit];
 
-    // Fade the gradient (render-only, no layout change) so the blur shows.
-    self.layer.opacity = 0.0;
+    // Keep the gradient itself invisible via a CLEAR fill instead of opacity=0. Fading with
+    // opacity fights iMessage's send-in animation (which animates the gradient's opacity/shape),
+    // producing solid-color flashes and shape morphing. A clear fill is invisible no matter what
+    // the animation does, and the blur behind carries the color.
+    self.layer.opacity = 1.0;
+    // Stamp this blur with the current conversation so it's only ever treated as "live" in the
+    // chat it was built for (a lingering/recycled balloon from another chat fails this check).
+    objc_setAssociatedObject(balloon, &kWAMSentBlurConvKey, @(gWAMChatGeneration),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // Reveal the blur (created hidden to avoid a black flash) BEFORE clearing the gradient, so
+    // setColors sees a live blur and switches the fill to clear — otherwise it keeps a solid fill.
+    blur.hidden = NO;
+    [self setColors:@[UIColor.clearColor, UIColor.clearColor]];
 }
 
 - (void)layoutSubviews {
@@ -5665,8 +5812,11 @@ static void wamClearForeignBlur(UIView *g) {
 
     int col = wamGradientBalloonColor(self);
 
-    // Sent bubbles (iMessage=1, SMS=0) with Blur Bubbles: gradient-level masked blur.
-    if (isBlurBubblesEnabled() && (col == 1 || col == 0)) {
+    // Sent bubbles (iMessage=1, SMS=0) with Blur Bubbles: gradient-level masked blur. Link
+    // preview bubbles (CKHyperlinkBalloonView) are gradient-filled too — including RECEIVED
+    // ones (col=-1), which the image/setImage path never reaches — so blur those here as well.
+    BOOL isLink = wamIsInsideHyperlinkBalloon(self, 6);
+    if (isBlurBubblesEnabled() && (col == 1 || col == 0 || (isLink && col == -1))) {
         [self wamApplySentBlur:col];
         return;
     }
@@ -5704,12 +5854,26 @@ static void wamClearForeignBlur(UIView *g) {
 
     // Sent + blur: layoutSubviews owns the blur. Color the gradient normally, but if the blur
     // already exists keep the gradient faded here too (setColors runs without a re-layout, and
-    // the system can otherwise re-show it over the blur = double).
-    if (isBlurBubblesEnabled() && (col == 1 || col == 0)) {
-        UIColor *sc = (col == 0) ? getSMSSentBubbleColor() : getSentBubbleColor();
-        %orig(@[sc, sc]);
-        if (self.superview && objc_getAssociatedObject(self.superview, &kWAMSentBlurKey))
-            self.layer.opacity = 0.0;
+    // the system can otherwise re-show it over the blur = double). Link-preview bubbles are
+    // gradient-filled including received (col=-1), so keep them faded here too.
+    BOOL isLink = wamIsInsideHyperlinkBalloon(self, 6);
+    if (isBlurBubblesEnabled() && (col == 1 || col == 0 || (isLink && col == -1))) {
+        UIColor *sc = (col == 0)  ? getSMSSentBubbleColor()
+                    : (col == -1) ? getReceivedBubbleColor()
+                                  : getSentBubbleColor();
+        UIView *balloon = self.superview;
+        BOOL blurShowing = wamSentBlurIsGood(balloon);
+        if (blurShowing) {
+            // A live blur is covering this bubble → clear the gradient's own fill so only the
+            // frosted blur (whose tint carries the color) shows.
+            %orig(@[UIColor.clearColor, UIColor.clearColor]);
+            CALayer *tint = objc_getAssociatedObject(balloon, &kWAMSentTintKey);
+            if (tint) tint.backgroundColor = sc.CGColor;
+        } else {
+            // No live blur yet — fresh/recycled balloon, or the send animation is mid-flight.
+            // Show THIS chat's solid color: never transparent, never a previous chat's blur.
+            %orig(@[sc, sc]);
+        }
         return;
     }
 
@@ -5776,6 +5940,7 @@ static char kWAMBlurShapeKey;     // the balloon shape image (resizable)
 static char kWAMBlurTintColorKey; // resolved bubble/reaction color for the tint
 static char kWAMBlurMirrorKey;    // @YES to horizontally mirror the mask (sent iMessage)
 static char kWAMBlurMaskSizeKey;  // NSValue(CGSize) the mask was last rendered at (render cache)
+static char kWAMBlurMaskGenKey;   // NSNumber(int) mask generation the mask was last rendered at
 
 // A fully-transparent stand-in with the EXACT geometry the solid tint path (wamTintBalloonImage)
 // produces — same cap insets, alignment rect insets (incl. the received +6/-8 adjustment) and
@@ -5919,8 +6084,10 @@ static void wamStripOurBlurs(UIView *balloon) {
     // so only re-render when the bubble size changes (the mask depends on size + shape/mirror,
     // and shape/mirror are refreshed via kWAMBlurMaskSizeKey being cleared in the apply path).
     NSValue *cachedSize = objc_getAssociatedObject(self, &kWAMBlurMaskSizeKey);
+    int cachedGen = [objc_getAssociatedObject(self, &kWAMBlurMaskGenKey) intValue];
     BOOL sizeChanged = !cachedSize || !CGSizeEqualToSize([cachedSize CGSizeValue], b.size);
-    if (shape && (sizeChanged || !mask.contents)) {
+    BOOL genChanged = (cachedGen != gWAMMaskGeneration);
+    if (shape && (sizeChanged || genChanged || !mask.contents)) {
         BOOL mirror = [objc_getAssociatedObject(self, &kWAMBlurMirrorKey) boolValue];
         UIImage *stretch = [shape resizableImageWithCapInsets:shape.capInsets
                                                  resizingMode:UIImageResizingModeStretch];
@@ -5936,6 +6103,8 @@ static void wamStripOurBlurs(UIView *balloon) {
         mask.contents = (id)rendered.CGImage;
         objc_setAssociatedObject(self, &kWAMBlurMaskSizeKey,
                                  [NSValue valueWithCGSize:b.size], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(self, &kWAMBlurMaskGenKey,
+                                 @(gWAMMaskGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     mask.frame = b;
     blur.layer.mask = mask;
@@ -6035,11 +6204,20 @@ static void wamStripOurBlurs(UIView *balloon) {
         if (hadOurBlur || objc_getAssociatedObject(self, &kWAMBlurViewKey) ||
             objc_getAssociatedObject(self, &kWAMSentBlurKey)) {
             wamStripOurBlurs(self);
-            static int sob = 0;
-            if (sob < 40) { sob++; WAMLOG(@"[sob #%d] stripped leftover blur off %@ %p",
-                sob, NSStringFromClass(self.class), self); }
         }
         return;
+    }
+
+    // A sent blur built in a PREVIOUS conversation (stale generation) must never present here.
+    // Hide it (so a lingering balloon from another chat can't show its blurred bubble), invalidate
+    // its mask, and force the gradient to re-run wamApplySentBlur so it's rebuilt for THIS chat —
+    // otherwise the bubble would sit on the solid fallback until some later layout (tap/scroll).
+    UIView *staleSent = objc_getAssociatedObject(self, &kWAMSentBlurKey);
+    if (staleSent && [objc_getAssociatedObject(self, &kWAMSentBlurConvKey) intValue] != gWAMChatGeneration) {
+        staleSent.hidden = YES;
+        objc_setAssociatedObject(self, &kWAMSentMaskSizeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        for (UIView *sv in self.subviews)
+            if ([sv isKindOfClass:objc_getClass("CKGradientView")]) [sv setNeedsLayout];
     }
 
     if (objc_getAssociatedObject(self, &kWAMBlurViewKey)) {
@@ -6816,14 +6994,10 @@ static void wamStripOurBlurs(UIView *balloon) {
     if (!inputFieldContainer) inputFieldContainer = [self findRoundedView:self];
     if (!inputFieldContainer) inputFieldContainer = [self findViewByClassName:self];
     if (!inputFieldContainer) {
-        WAMLOG(@"[input] no container found");
         return;
     }
 
     BOOL customEnabled = isInputFieldCustomizationEnabled();
-    BOOL phEnabled = isPlaceholderCustomizationEnabled();
-    BOOL textEnabled = isMessageInputTextEnabled();
-    WAMLOG(@"[input] custom=%d ph=%d text=%d surface=%d", customEnabled, phEnabled, textEnabled, gWAMChatIsActiveSurface);
 
     NSArray *subviewsCopy = [inputFieldContainer.subviews copy];
     for (UIView *subview in subviewsCopy) {
@@ -6865,9 +7039,6 @@ static void wamStripOurBlurs(UIView *balloon) {
     [inputFieldContainer layoutIfNeeded];
 
     if (textView && [textView isKindOfClass:%c(CKMessageEntryRichTextView)]) {
-        NSInteger labelCount = 0;
-        for (UIView *sv in textView.subviews) { if ([sv isKindOfClass:[UILabel class]]) labelCount++; }
-        WAMLOG(@"[input] textView found, labels=%ld textEnabled=%d phEnabled=%d", (long)labelCount, textEnabled, phEnabled);
         if (isMessageInputTextEnabled()) {
             if (!objc_getAssociatedObject(textView, &kWAMInputTextOrigColorKey)) {
                 objc_setAssociatedObject(textView, &kWAMInputTextOrigColorKey,
@@ -6924,9 +7095,6 @@ static void wamStripOurBlurs(UIView *balloon) {
                     }
                     objc_setAssociatedObject(label, &kWAMPlaceholderOrigTextKey, toSave,
                         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    WAMLOG(@"[ph] saving origText='%@' matchCustom=%d",
-                        currentText ?: @"(nil)",
-                        (currentText.length && [currentText isEqualToString:customText]));
                 }
                 label.textColor = getPlaceholderTextColor();
                 if (customText) label.text = customText;
@@ -7103,7 +7271,6 @@ static const char kWAMDrawerOverlayKey = 0;
     UIColor *buttonColor = getMessageBarButtonColor();
     BOOL customizeOtherButtons = isMessageBarButtonsEnabled();
 
-    NSInteger drawers = 0, sends = 0;
     for (UIView *subview in self.subviews) {
         if (![subview isKindOfClass:[UIVisualEffectView class]]) continue;
         UIVisualEffectView *effectView = (UIVisualEffectView *)subview;
@@ -7129,7 +7296,6 @@ static const char kWAMDrawerOverlayKey = 0;
                     arrowImage = [arrowImage imageWithTintColor:arrowColor renderingMode:UIImageRenderingModeAlwaysOriginal];
                     existingArrow.image = arrowImage;
                 }
-                sends++;
                 continue;
             }
 
@@ -7172,7 +7338,6 @@ static const char kWAMDrawerOverlayKey = 0;
                                                         arrowSize.width, arrowSize.height);
                         [button addSubview:arrowOverlay];
                     }
-                    sends++;
                 } else if (drawerSize) {
                     // The drawer glyph lives inside the button's vibrancy effect view,
                     // which desaturates an in-place tint. So we mirror it with an opaque
@@ -7208,21 +7373,9 @@ static const char kWAMDrawerOverlayKey = 0;
                             objc_setAssociatedObject(self, &kWAMDrawerOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                         }
                     }
-                    drawers++;
                 }
             }
         }
-    }
-
-    // Per-instance change-detection log (so every button instance is visible, not
-    // just whichever one wins a shared throttle).
-    static const char kWAMEntryLogSigKey = 0;
-    NSString *sig = [NSString stringWithFormat:@"%d-%ld-%ld-%@", customizeOtherButtons, (long)drawers, (long)sends, buttonColor ? @"b" : @"n"];
-    NSString *lastSig = objc_getAssociatedObject(self, &kWAMEntryLogSigKey);
-    if (![sig isEqualToString:lastSig]) {
-        objc_setAssociatedObject(self, &kWAMEntryLogSigKey, sig, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        WAMLOG(@"[entry] self=%p custom=%d drawers=%ld sends=%ld btnC=%@",
-            self, customizeOtherButtons, (long)drawers, (long)sends, buttonColor ? @"set" : @"nil");
     }
 }
 
@@ -7332,7 +7485,6 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("CKDetailsTableView.layout");
     UITableView *tv = (UITableView *)self;
     if (objc_getAssociatedObject(self, "wam_everSawPhotoCell")) return;
     if (objc_getAssociatedObject(self, "wam_headerInstallScheduled")) return;
@@ -7752,8 +7904,6 @@ static const char kWAMDrawerOverlayKey = 0;
 
 - (void)didMoveToWindow {
     %orig;
-    if (NO) WAMLOG(@"CNGroupIdentityHeaderContainerView.didMoveToWindow frame=%@ super=%@",
-        NSStringFromCGRect(((UIView *)self).frame), NSStringFromClass([self.superview class]));
     if (!isTweakEnabled()) return;
     self.backgroundColor = [UIColor clearColor];
     [self applyContactNameColor];
@@ -7768,11 +7918,9 @@ static const char kWAMDrawerOverlayKey = 0;
 }
 
 - (void)setFrame:(CGRect)frame {
-    CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 213) {
         frame.size.height = 213;
     }
-    if (NO) WAMLOG(@"CNGroupIdentityHeaderContainerView.setFrame in=%.1f out=%.1f", orig, frame.size.height);
     %orig(frame);
 }
 
@@ -7862,8 +8010,6 @@ static const char kWAMDrawerOverlayKey = 0;
 
 - (void)didMoveToWindow {
     %orig;
-    if (NO) WAMLOG(@"CKGroupPhotoCell.didMoveToWindow window=%@ frame=%@ name=%@",
-        self.window, NSStringFromCGRect(((UIView *)self).frame), gWAMCurrentContactName);
     self.backgroundColor = [UIColor clearColor];
     UITableViewCell *cell = (UITableViewCell *)self;
     if ([cell respondsToSelector:@selector(contentView)]) {
@@ -7909,11 +8055,9 @@ static const char kWAMDrawerOverlayKey = 0;
 }
 
 - (void)setFrame:(CGRect)frame {
-    CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 0 && frame.size.height < 277) {
         frame.size.height = 277;
     }
-    if (NO) WAMLOG(@"CKGroupPhotoCell.setFrame in=%.1f out=%.1f", orig, frame.size.height);
     %orig(frame);
 }
 
@@ -7957,8 +8101,6 @@ static const char kWAMDrawerOverlayKey = 0;
     static const NSInteger kTintTag = 87733;
     UITableViewCell *cell = (UITableViewCell *)self;
     UIView *host = [cell respondsToSelector:@selector(contentView)] ? cell.contentView : (UIView *)self;
-    if (NO) WAMLOG(@"ensurePerContactBgButton cell.frame=%@ host=%@ host.frame=%@",
-        NSStringFromCGRect(cell.frame), NSStringFromClass([host class]), NSStringFromCGRect(host.frame));
     host.clipsToBounds = NO;
     cell.clipsToBounds = NO;
 
@@ -8404,7 +8546,6 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("BlurredCell.layout");
 
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
@@ -8486,7 +8627,6 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("BlurredCell.layout");
 
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
@@ -8573,7 +8713,6 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("BlurredCell.layout");
 
     for (UIView *subview in self.subviews) {
         if ([subview isKindOfClass:[UIVisualEffectView class]]) {
@@ -10424,7 +10563,6 @@ static char kWAMPickerBlursKey;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("CNContactView.layout");
 
     if (self.superview && shouldShowAnyChatBgImage()) {
         UIImageView *existing = nil;
@@ -10629,11 +10767,9 @@ static char kWAMPickerBlursKey;
 
 %hook CNContactHeaderDisplayView
 - (void)setFrame:(CGRect)frame {
-    CGFloat orig = frame.size.height;
     if (isTweakEnabled() && isPerContactChatBgEnabled() && frame.size.height > 213) {
         frame.size.height = 213;
     }
-    if (NO) WAMLOG(@"CNContactHeaderDisplayView.setFrame in=%.1f out=%.1f", orig, frame.size.height);
     %orig(frame);
 }
 
@@ -11029,34 +11165,90 @@ static char kWAMPickerBlursKey;
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
-    [self applyTypingIndicatorColors];
+    if (!isTweakEnabled()) return;
+    if (isBlurBubblesEnabled() || isCustomBubbleColorsEnabled()) [self applyTypingIndicatorColors];
 }
 
 - (void)didMoveToWindow {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled() || !self.window) return;
-    [self applyTypingIndicatorColors];
+    if (!isTweakEnabled() || !self.window) return;
+    if (isBlurBubblesEnabled() || isCustomBubbleColorsEnabled()) [self applyTypingIndicatorColors];
 }
 
 - (void)setIndicatorLayer:(CALayer *)layer {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self applyTypingIndicatorColors];
-    });
+    if (!isTweakEnabled()) return;
+    if (isBlurBubblesEnabled() || isCustomBubbleColorsEnabled())
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self applyTypingIndicatorColors];
+        });
+}
+
+%new
+- (void)wamRemoveTypingBlur {
+    UIView *blur = objc_getAssociatedObject(self, &kWAMTypingBlurKey);
+    if (blur) [blur removeFromSuperview];
+    objc_setAssociatedObject(self, &kWAMTypingBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// Give the typing indicator a frosted, pill-shaped blur behind its dots. With Blur Bubbles on,
+// users often drop their received color alpha to near-zero — which would make the solid typing
+// bubble invisible. The blur keeps it visible regardless of the tint's alpha.
+%new
+- (void)wamApplyTypingBlur:(CALayer *)bubbleContainer tint:(UIColor *)tint {
+    CGRect pill = [self.layer convertRect:bubbleContainer.bounds fromLayer:bubbleContainer];
+    if (pill.size.width < 5 || pill.size.height < 5) {   // container has no bounds — union its shapes
+        CGRect u = CGRectNull;
+        for (CALayer *sl in bubbleContainer.sublayers) {
+            CGRect r = [self.layer convertRect:sl.bounds fromLayer:sl];
+            if (r.size.width < 2 || r.size.height < 2) continue;
+            u = CGRectIsNull(u) ? r : CGRectUnion(u, r);
+        }
+        if (!CGRectIsNull(u)) pill = u;
+    }
+    if (pill.size.width < 5 || pill.size.height < 5) return;
+    // The stock typing bubble is roomy between the dots and the edge — pull the sides in.
+    CGFloat inset = MIN(pill.size.width * 0.14, 11.0);
+    pill = CGRectInset(pill, inset, 0);
+
+    UIVisualEffectView *blur = objc_getAssociatedObject(self, &kWAMTypingBlurKey);
+    if (!blur) {
+        blur = wamMakeBlurView(pill);
+        blur.userInteractionEnabled = NO;
+        blur.clipsToBounds = YES;
+        blur.layer.zPosition = -1;   // render behind the layer-based indicator (dots stay on top)
+        objc_setAssociatedObject(self, &kWAMTypingBlurKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (blur.superview != self) [self addSubview:blur];
+    blur.frame = pill;
+    blur.layer.cornerRadius = pill.size.height / 2.0;   // pill
+    wamStripEffectTint(blur);
+    blur.contentView.backgroundColor = tint;            // respects the color's own alpha
 }
 
 %new
 - (void)applyTypingIndicatorColors {
     UIColor *typingColor = getReceivedBubbleColor();
-    if (!typingColor) return;
 
     CALayer *indicatorLayer = nil;
     @try { indicatorLayer = [self valueForKey:@"indicatorLayer"]; } @catch (NSException *e) { return; }
     if (!indicatorLayer || indicatorLayer.sublayers.count < 2) return;
 
     CALayer *bubbleContainer = indicatorLayer.sublayers[0];
+
+    // Blur only inside a chat transcript — on the conversation list / pinned grid the indicator
+    // should keep the stock/global solid color (the blur override there was the bug).
+    if (isBlurBubblesEnabled() && !wamViewInNonChatContext(self)) {
+        // Frosted background + tint; clear the solid fill so only the blur shows behind the dots.
+        [self wamApplyTypingBlur:bubbleContainer tint:typingColor];
+        for (CALayer *bubbleLayer in bubbleContainer.sublayers)
+            bubbleLayer.backgroundColor = [UIColor clearColor].CGColor;
+        return;   // leave dots at their default (visible against the blur)
+    }
+
+    [self wamRemoveTypingBlur];
+    if (!isCustomBubbleColorsEnabled() || !typingColor) return;
+
     for (CALayer *bubbleLayer in bubbleContainer.sublayers) bubbleLayer.backgroundColor = typingColor.CGColor;
 
     CALayer *dotsContainer = indicatorLayer.sublayers[1];
@@ -11121,8 +11313,6 @@ static char kWAMPickerBlursKey;
     UIColor *tint = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self);
     if (!tint) tint = getSystemTintColor();
 
-    NSInteger touched = 0;
-    NSInteger reverted = 0;
     NSMutableArray *queue = [NSMutableArray arrayWithObject:view];
     while (queue.count) {
         UIView *v = queue.firstObject;
@@ -11142,12 +11332,10 @@ static char kWAMPickerBlursKey;
                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                         }
                         iv.tintColor = tint;
-                        touched++;
                     } else {
                         if (objc_getAssociatedObject(iv, &kWAMNavImgTintKey)) {
                             iv.tintColor = nil;
                             objc_setAssociatedObject(iv, &kWAMNavImgTintKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                            reverted++;
                         }
                     }
                 }
@@ -11156,8 +11344,6 @@ static char kWAMPickerBlursKey;
         }
         for (UIView *sub in v.subviews) [queue addObject:sub];
     }
-    WAMLOG(@"[navcanvas] tint=%@ touched=%ld reverted=%ld",
-        tint ? @"set" : @"nil", (long)touched, (long)reverted);
 }
 
 - (void)dealloc {
@@ -11273,7 +11459,6 @@ static char kWAMPickerBlursKey;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
-    wamHit("LargeTitleView.layout");
     [self applyLargeTitleStyle];
 }
 
@@ -11561,20 +11746,88 @@ static char kWAMPickerBlursKey;
 
 %end
 
+// Rich link previews (CKTranscriptPluginBalloonView > RichLinkView > LPFlippedView) have NO
+// CKGradientView — RichLinkView draws the background — so the gradient sent-blur path never
+// touches them. RichLinkView is in a framework that isn't loaded when Logos registers hooks,
+// so %hook RichLinkView never fires. But LPFlippedView (LinkPresentation) DOES hook, so we
+// reach RichLinkView by walking up from it and anchor a rounded, tinted blur there.
+static UIView *wamFindLinkContainer(UIView *v) {
+    UIView *p = v ? v.superview : nil; int hops = 0;
+    while (p && hops < 6) {
+        if ([NSStringFromClass(p.class) isEqualToString:@"RichLinkView"]) return p;
+        p = p.superview; hops++;
+    }
+    return nil;
+}
+
+static void wamRemoveLinkBlur(UIView *container) {
+    UIView *blur = objc_getAssociatedObject(container, &kWAMLinkBlurKey);
+    if (blur) [blur removeFromSuperview];
+    objc_setAssociatedObject(container, &kWAMLinkBlurKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void wamApplyLinkBlur(UIView *container) {
+    if (!container) return;
+    if (!isBlurBubblesEnabled()) { wamRemoveLinkBlur(container); return; }
+    CGRect b = container.bounds;
+    if (b.size.width < 5 || b.size.height < 5) return;
+
+    UIVisualEffectView *blur = objc_getAssociatedObject(container, &kWAMLinkBlurKey);
+    if (!blur) {
+        blur = wamMakeBlurView(b);              // tagged with kWAMIsOurBlurKey
+        blur.userInteractionEnabled = NO;
+        blur.clipsToBounds = YES;               // round the frosted glass to the preview shape
+        blur.layer.cornerRadius = 2.0;         // match the rounded link-preview bubble
+        // Autoresize with the container so we don't depend on a per-layout hook (RichLinkView's
+        // layoutSubviews isn't hookable) — the blur tracks the preview as its size settles.
+        blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        objc_setAssociatedObject(container, &kWAMLinkBlurKey, blur, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [container insertSubview:blur atIndex:0];   // behind the preview content, re-assert on reuse
+    blur.frame = container.bounds;
+    wamStripEffectTint(blur);
+    // Tint via the content view's background (autoresizes with the effect view; respects alpha).
+    blur.contentView.backgroundColor = getLinkPreviewBackgroundColor();
+}
+
 %hook LPFlippedView
 
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
     if (!isTweakEnabled()) { %orig; return; }
+    // Blur Bubbles: the RichLinkView blur behind this preview is what should show, so keep the
+    // preview background clear (the thumbnail image stays opaque on top of it).
+    if (isBlurBubblesEnabled()) { %orig([UIColor clearColor]); return; }
     UIColor *customLinkColor = getLinkPreviewBackgroundColor();
     if (customLinkColor) { %orig(customLinkColor); return; }
     %orig;
 }
 
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    UIView *rlv = wamFindLinkContainer(self);
+    if (!rlv) return;
+    if (isBlurBubblesEnabled()) wamApplyLinkBlur(rlv);
+    else wamRemoveLinkBlur(rlv);
+}
+
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
-    UIColor *customLinkColor = getLinkPreviewBackgroundColor();
-    if (customLinkColor) self.backgroundColor = customLinkColor;
+    if (isBlurBubblesEnabled()) self.backgroundColor = [UIColor clearColor];
+    else {
+        UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+        if (customLinkColor) self.backgroundColor = customLinkColor;
+    }
+
+    // Anchor / tear down the rich-preview blur on the RichLinkView ancestor.
+    if (self.window) {
+        UIView *rlv = wamFindLinkContainer(self);
+        if (rlv) {
+            if (isBlurBubblesEnabled()) wamApplyLinkBlur(rlv);
+            else wamRemoveLinkBlur(rlv);
+        }
+    }
 
     if (self.window) {
         [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
@@ -11590,8 +11843,11 @@ static char kWAMPickerBlursKey;
 %new
 - (void)handleLinkPrefsChanged {
     refreshPrefs();
-    UIColor *customLinkColor = getLinkPreviewBackgroundColor();
-    if (customLinkColor) self.backgroundColor = customLinkColor;
+    if (isBlurBubblesEnabled()) self.backgroundColor = [UIColor clearColor];
+    else {
+        UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+        if (customLinkColor) self.backgroundColor = customLinkColor;
+    }
     [self setNeedsLayout];
     [self layoutIfNeeded];
 }
@@ -11602,8 +11858,11 @@ static char kWAMPickerBlursKey;
     if (@available(iOS 13.0, *)) {
         if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
             refreshPrefs();
-            UIColor *customLinkColor = getLinkPreviewBackgroundColor();
-            if (customLinkColor) self.backgroundColor = customLinkColor;
+            if (isBlurBubblesEnabled()) self.backgroundColor = [UIColor clearColor];
+            else {
+                UIColor *customLinkColor = getLinkPreviewBackgroundColor();
+                if (customLinkColor) self.backgroundColor = customLinkColor;
+            }
         }
     }
 }
@@ -12002,6 +12261,18 @@ static char kWAMPickerBlursKey;
     dispatch_async(dispatch_get_main_queue(), ^{
         [WAMHeartbeatTarget shared];
     });
+
+    // Blur masks are cached CGImages whose backing iOS purges on background / memory pressure,
+    // leaving the blur a full square on resume. Bump the mask generation on those events so the
+    // next layout pass re-renders every blur mask fresh.
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
+        object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            gWAMMaskGeneration++;
+        }];
+    [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidReceiveMemoryWarningNotification
+        object:nil queue:[NSOperationQueue mainQueue] usingBlock:^(NSNotification *n) {
+            gWAMMaskGeneration++;
+        }];
 }
 
 /* Made with love from the Show Me State. Support small content creators and local farmers! */

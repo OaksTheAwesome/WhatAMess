@@ -22,6 +22,7 @@
 -(void)wamRetryBgRefresh:(int)attempt;
 -(void)wamClearChatAndForceRefresh;
 -(void)wamRefreshChatBackgroundWithSelfContext;
+-(void)wamRevalidateBlurs;
 @end
 
 @interface _UIBarBackground : UIView
@@ -270,6 +271,9 @@
 @interface LPFlippedView : UIView
 @end
 
+@interface RichLinkView : UIView
+@end
+
 @interface LPTextView : UIView
 -(void)applyLinkTextColors;
 @end
@@ -336,6 +340,8 @@
 
 @interface CKTypingView : UIView
 -(void)applyTypingIndicatorColors;
+-(void)wamApplyTypingBlur:(CALayer *)bubbleContainer tint:(UIColor *)tint;
+-(void)wamRemoveTypingBlur;
 @end
 
 // Category declarations for system classes with added methods

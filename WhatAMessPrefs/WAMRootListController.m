@@ -13,7 +13,39 @@
     if (!_specifiers) {
         _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
     }
+    [self applyLiquidAssLock];
     return _specifiers;
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reloadSpecifiers];   // re-check LiquidAss installed-ness each time this page is shown
+}
+
+#pragma mark - Liquid (Gl)ass Compatibility (Beta)
+
+- (BOOL)isLiquidAssInstalled {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dylibsDir = WAMJBPath(@"/Library/MobileSubstrate/DynamicLibraries");
+    NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:dylibsDir error:nil];
+    for (NSString *name in entries) {
+        if ([name.lowercaseString isEqualToString:@"liquidass.dylib"]) return YES;
+    }
+    return NO;
+}
+
+- (void)applyLiquidAssLock {
+    BOOL installed = [self isLiquidAssInstalled];
+    for (PSSpecifier *spec in _specifiers) {
+        if ([spec.properties[@"lightModeKey"] isEqualToString:@"isLiquidAssCompatEnabled"]) {
+            [spec setProperty:@(installed) forKey:@"enabled"];
+        } else if ([spec.properties[@"label"] isEqualToString:@"Liquid (Gl)ass Compatibility (Beta)"]) {
+            NSString *footer = installed
+                ? @"Uses Liquid (Gl)ass's glass materials for platters and blurred surfaces where supported, instead of the stock blur. Incomplete and buggy and I honestly don't care enough to perfect, but it was cool to throw in. Inherits glass properties from \"Search Pill\" settings. Could break anytime and doesnt work in lanscape."
+                : @"Locked because Liquid (Gl)ass isn't installed. Install it (github.com/winaviation-tweaks/liquidass) to use this option.";
+            [spec setProperty:footer forKey:@"footerText"];
+        }
+    }
 }
 
 #pragma mark - Color Pickers

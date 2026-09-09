@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <dlfcn.h>
 #import <WAMTweakInterfaces.h>
 #import "WAMPresetModel.h"
 #import "WAMPresetCardView.h"
@@ -23,6 +24,15 @@ Here be dragons!*/
 #define kPrefsChangedNotification @"com.oakstheawesome.whatamessprefs/prefsChanged"
 #define kPrefsPlistPathRootless @"/var/jb/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
 #define kPrefsPlistPathRootfull  @"/var/mobile/Library/Preferences/com.oakstheawesome.whatamessprefs.plist"
+
+// Marketing-screenshot mode — redacts names/previews/avatars in the conversation list with fake data so real
+// conversations never appear in ad art. DEV/BUILD-TIME ONLY: set this to 0 (or delete the whole
+// WAM_SCREENSHOT_MODE section, search for it below) before building anything that ships.
+#define WAM_SCREENSHOT_MODE 1
+// Declared unconditionally (not inside the #if block) so the general UILabel -setTextColor: hook can bypass
+// its per-context color logic for this one injected label even when screenshot mode is compiled out — a
+// no-op tag check either way, negligible cost, avoids duplicating the constant in two places.
+static const NSInteger kWAMScreenshotInitialLabelTag = 84492;
 
 __attribute__((unused)) static void logToFile(NSString *message) {
     NSString *log = [NSString stringWithFormat:@"%@\n", message];
@@ -58,7 +68,23 @@ static NSString *gWAMCurrentContactDisplayName = nil;
 static NSString *gWAMTriggerNameOverride = nil;
 static NSString *gWAMActiveChatName = nil;
 static NSString *gWAMNotifContactName = nil;
+// Pinned while a chat's contact/details card is on screen: the chat's own view leaves the window when
+// details pushes on top, so gWAMChatIsActiveSurface flips off — this keeps per-contact theming resolving
+// to that chat's contact for the details view.
+static NSString *gWAMDetailsContactName = nil;
+// Bumped whenever a chat is force-re-themed (per-contact preset/toggle applied). A background file can be
+// overwritten with new content but the SAME path and an unchanged mtime (preset images are copied with
+// copyItemAtPath:, which preserves the source's modification date), so mtime alone can't invalidate the
+// cached image or the "state unchanged" skip. Folding this counter into both keys guarantees a rebuild.
+static NSUInteger gWAMChatBgGen = 0;
+static const char kWAMChatBgStateKey = 0;   // assoc-obj key on the chat view holding its bg "state" string
 static BOOL gWAMChatIsActiveSurface = NO;
+// Set while theming a conversation-list element (e.g. the relocated bottom search field) so advanced-tint
+// resolution ignores the last chat's per-contact overrides and uses the global values instead — the
+// search bar belongs to the list, not to any one contact.
+static BOOL gWAMForceGlobalColorResolve = NO;
+static __weak UIView *gWAMNameShadow = nil;   // name-platter shadow view, tracked so it can be torn down when the chat is left
+static BOOL gWAMChatLeaving = NO;             // set while the chat is animating away, so the shadow's fade-out isn't reset
 static BOOL gWAMPreviewActive = NO;
 static NSTimeInterval gWAMCacheSetAt = 0;
 static NSTimeInterval gWAMTapSetAt = 0;
@@ -168,6 +194,10 @@ static void wamMigrateLegacyTrailingUnderscoreKeys(void) {
 static BOOL gWAMConvListViewVisible = NO;
 static NSString *getActiveContactNameForBg(void);
 static void wamReconcileAliasForChat(NSString *chatIdentifier, NSString *displayName);
+static void wamApplyNavButtonPlatter(UIView *host);
+static void wamApplyNamePlatter(UIView *nameView);
+static BOOL wamIsLandscape(void);
+static void wamTearDownChatNavOverlays(void);
 BOOL isCustomTextColorsEnabled(void);
 BOOL isTweakEnabled(void);
 UIColor *getTitleTextColorConvList(void);
@@ -268,6 +298,74 @@ static void wamForceVisualRefresh(UIView *view) {
     }
 }
 
+// Force an immediate, settled layout pass over every window — used after a rotation/size transition
+// completes so all our layoutSubviews-driven overlays (name platter, avatar/name shadows, nav-button
+// platters, bottom search) recompute against the final post-rotation frames instead of the mid-transition
+// ones that left them stale (shadows stranded far-left, platters mis-sized).
+static void wamForceLayoutAllWindows(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                wamForceVisualRefresh(w);   // recursively mark EVERY subview needsLayout (not just the window)
+                [w layoutIfNeeded];         // then lay them all out so each overlay's layoutSubviews re-runs
+            }
+        }
+    }
+}
+
+// Remove the chat title/avatar overlays (name platter 4401, name shadow 4403, avatar shadow 4405). In the
+// landscape two-column split iOS does NOT re-lay-out the chat's title/avatar area, so these overlays can't
+// be repositioned and otherwise freeze at their portrait x (≈182) — reading as "far left" in the wide
+// container. Tearing them down gives a clean stock title in landscape; the name view rebuilds them in
+// portrait (which lays out normally).
+__attribute__((unused)) static void wamTearDownChatNavOverlays(void) {
+    static const NSInteger tags[] = {4401, 4403, 4405};
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                for (int i = 0; i < 3; i++) {
+                    UIView *v;
+                    while ((v = [w viewWithTag:tags[i]])) [v removeFromSuperview];
+                }
+            }
+        }
+    }
+    gWAMNameShadow = nil;
+}
+
+// Re-drive the chat title/avatar overlays after a rotation. iOS doesn't re-lay-out the chat's title
+// collection view (CKAvatarTitleCollectionReusableView) or the avatar container on a size change, so their
+// overlays freeze at the pre-rotation geometry. Find those views and force them to recompute against the
+// settled post-rotation frames so the name platter / shadows / avatar shadow reposition for the new width.
+static void wamRedriveChatOverlays(void) {
+    // In the landscape split the chat title/avatar views aren't re-laid-out (and often aren't even in the
+    // compact bar), so their overlays can't tear themselves down and freeze at portrait geometry. Remove
+    // them by tag over every window; portrait rebuilds them when it lays out normally.
+    if (wamIsLandscape()) { wamTearDownChatNavOverlays(); return; }
+    Class nameCls = %c(CKAvatarTitleCollectionReusableView);
+    Class avatarCls = %c(CNVisualIdentityAvatarContainerView);
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                NSMutableArray *q = [NSMutableArray arrayWithObject:w];
+                while (q.count) {
+                    UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                    if (nameCls && [v isKindOfClass:nameCls]) {
+                        wamApplyNamePlatter(v);
+                    } else if (avatarCls && [v isKindOfClass:avatarCls]) {
+                        [v setNeedsLayout];
+                        [v layoutIfNeeded];
+                    }
+                    [q addObjectsFromArray:v.subviews];
+                }
+            }
+        }
+    }
+}
+
 static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
     if (!view) return;
     Class cellCls = %c(CKConversationListCollectionViewConversationCell);
@@ -292,6 +390,7 @@ static void wamForceGlobalColorsOnConvListLabels(UIView *view) {
 }
 
 static void wamHealBlursInView(UIView *root);
+static BOOL wamIsNotificationExtension(void);
 
 @interface WAMHeartbeatTarget : NSObject
 + (instancetype)shared;
@@ -313,6 +412,14 @@ static void wamHealBlursInView(UIView *root);
 }
 - (void)tick {
     if (!isTweakEnabled()) return;
+    // This whole tick is about tracking a live CKMessagesController's foreground/background state in the
+    // main app — a concept that doesn't exist in any extension process. There, it always finds foundCtrl ==
+    // nil and "no chat visible", so all it ever did was forcibly reset gWAMChatIsActiveSurface/
+    // gWAMCurrentContactName back to nil on literally the next frame after wamAdoptNotificationContact /
+    // wamUpdateComposeRecipientName set them — a 60fps fight that made per-contact resolution flicker
+    // between correct and reset. Those two functions are the sole source of truth for extension processes;
+    // let them own it entirely.
+    if (wamIsNotificationExtension()) return;
     NSMutableArray *winList = [NSMutableArray array];
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -579,6 +686,7 @@ static BOOL wamIsPreviewContext(UIViewController *vc) {
 
 static NSString *getCurrentContactName(void) {
     if (gWAMNotifContactName.length) return gWAMNotifContactName;
+    if (gWAMDetailsContactName.length) return gWAMDetailsContactName;
     Class messagesCtrlClass = %c(CKMessagesController);
     if (!messagesCtrlClass) return nil;
 
@@ -695,6 +803,30 @@ static NSDictionary *loadPrefs() {
 
 static void refreshPrefs() {
     reloadPrefs();
+}
+
+// A per-contact change made from the settings sheet (a preset apply, a toggle, a mode flip) needs to
+// re-theme the chat *now* — posting the prefs notification alone doesn't fully re-render it (only a
+// fresh chat-entry does). Find the live CKMessagesController and run its comprehensive re-theme, so the
+// background, platters and colors all pick up the new per-contact values without leaving the chat.
+static void wamTriggerFullChatRefresh(void) {
+    Class msgCls = %c(CKMessagesController);
+    NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes)
+            if ([scene isKindOfClass:[UIWindowScene class]])
+                [wins addObjectsFromArray:((UIWindowScene *)scene).windows];
+    }
+    for (UIWindow *w in wins) {
+        UIViewController *mc = msgCls ? wamFindVCInHierarchy(w.rootViewController, msgCls) : nil;
+        if (mc && [mc respondsToSelector:@selector(wamRethemeCurrentChat)]) {
+            [mc performSelector:@selector(wamRethemeCurrentChat)];
+            return;
+        }
+    }
+    // No chat on screen — at least reload and let observers repaint.
+    reloadPrefs();
+    [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
 }
 
 static NSString *getConvImagePath() {
@@ -834,7 +966,10 @@ static void clearPerContactOverride(NSString *contactName, NSString *key) {
 __attribute__((unused))
 static id effectiveValueForKey(NSString *key) {
     if (!key.length) return nil;
-    if (!gWAMChatIsActiveSurface && !gWAMNotifContactName.length) return loadPrefs()[key];
+    // Forced global (e.g. the conversation-list search bar in the landscape split): never resolve the open
+    // chat's per-contact override, even though its surface is active.
+    if (gWAMForceGlobalColorResolve) return loadPrefs()[key];
+    if (!gWAMChatIsActiveSurface && !gWAMNotifContactName.length && !gWAMDetailsContactName.length) return loadPrefs()[key];
     NSString *name = getCurrentContactName();
     if (name.length && perContactOverridesEnabled(name)) {
         id override = getPerContactOverride(name, key);
@@ -996,13 +1131,14 @@ static void wamResolvePerContactImageAndName(NSString **outPath, NSString **outN
     if (outPath) *outPath = nil;
     if (outName) *outName = nil;
     if (!isPerContactChatBgEnabled()) return;
-    if (!gWAMChatIsActiveSurface && !gWAMNotifContactName.length) return;
+    if (!gWAMChatIsActiveSurface && !gWAMNotifContactName.length && !gWAMDetailsContactName.length) return;
 
     NSMutableArray *candidates = [NSMutableArray array];
     void (^add)(NSString *) = ^(NSString *n) {
         if (n.length && ![candidates containsObject:n]) [candidates addObject:n];
     };
     add(gWAMNotifContactName);
+    add(gWAMDetailsContactName);
     add(getActiveContactNameForBg());
     add(gWAMTriggerNameOverride);
     add(gWAMCurrentContactName);
@@ -1072,6 +1208,256 @@ BOOL isModernNavBarEnabled() {
     NSDictionary *prefs = loadPrefs();
     NSString *key = isDarkMode() ? @"isModernNavBarEnabledDark" : @"isModernNavBarEnabled";
     return prefs[key] ? [prefs[key] boolValue] : YES;
+}
+
+__attribute__((unused)) static BOOL wamIsLandscape(void) {
+    // UIScreen.bounds does NOT rotate on iPhone — it always reports portrait dimensions — so aspect
+    // ratio there is useless. The window scene's interfaceOrientation is authoritative and valid in
+    // any context (unlike UITraitCollection). Prefer the foreground-active scene.
+    if (@available(iOS 13.0, *)) {
+        UIWindowScene *fallback = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            UIWindowScene *ws = (UIWindowScene *)scene;
+            if (!fallback) fallback = ws;
+            if (ws.activationState == UISceneActivationStateForegroundActive)
+                return UIInterfaceOrientationIsLandscape(ws.interfaceOrientation);
+        }
+        if (fallback) return UIInterfaceOrientationIsLandscape(fallback.interfaceOrientation);
+    }
+    return NO;
+}
+
+// Vertical offset for the nav buttons. Portrait: Edit/Compose drop 6 to sit centred on their platters,
+// FaceTime/others stay at 0 (already centred in the taller bar). Landscape split: all three share ONE
+// lower offset so Edit, Compose and the chat call button line up at the same height, moved down a bit.
+__attribute__((unused)) static CGFloat wamNavButtonDropY(BOOL isEditOrCompose) {
+    // Landscape: Edit/Compose reach the common target centre (~32) with a +11 content shift from their
+    // measured base of ~21. (FaceTime uses a computed drop instead — see wamApplyCallButtonDrop — because
+    // transforming its button VIEW is absorbed by UIKit's frame layout.)
+    if (wamIsLandscape()) return 11.0;
+    return isEditOrCompose ? 6.0 : 0.0;
+}
+
+// Common window-y centre the three landscape nav buttons line up on (measured: Edit/Compose land here).
+__attribute__((unused)) static CGFloat wamLandscapeNavCenterY(void) { return 32.0; }
+
+BOOL isNavButtonBlurEnabled() {
+    NSString *key = isDarkMode() ? @"isNavButtonBlurEnabledDark" : @"isNavButtonBlurEnabled";
+    id v = effectiveValueForKey(key);   // per-mode + per-contact override
+    return v ? [v boolValue] : NO;
+}
+
+// Conversation-list platters aren't contact-specific — always read the global (per-mode) value so a
+// per-contact override from a chat never leaks onto the list.
+static BOOL isNavButtonBlurEnabledGlobal() {
+    NSString *key = isDarkMode() ? @"isNavButtonBlurEnabledDark" : @"isNavButtonBlurEnabled";
+    id v = loadPrefs()[key];
+    return v ? [v boolValue] : NO;
+}
+
+/* ===================================================================================================
+   LIQUID (GL)ASS COMPATIBILITY (BETA)
+   ---------------------------------------------------------------------------------------------------
+   Soft, optional integration with the third-party "Liquid (Gl)ass" tweak (github.com/winaviation-tweaks/
+   liquidass — package/dylib name "liquidass"), which injects into every UIKit process (including
+   Messages) and exposes an undocumented C API (Shared/LGGlassKit.h) for registering custom views as
+   "glass" material hosts. When present AND the user has opted in, our platter/blur containers get a real
+   liquid-glass backdrop instead of our stock UIVisualEffectView blur.
+
+   This is resolved via dlsym rather than linked, so the tweak works identically whether or not Liquid
+   (Gl)ass is installed — a missing symbol just means the toggle stays locked and nothing below ever runs.
+   Because its own README says "This tweak is incomplete, issues WILL happen" and its API is undocumented
+   (reverse-derived from headers, not a stable contract), this whole feature ships as an opt-in beta.
+=================================================================================================== */
+
+typedef UIView *(*WAMLGInstallRegisteredGlassInMaterial_t)(UIView *material, const void *associationKey,
+    NSString *prefix, UIEdgeInsets outset, CGFloat cornerRadius, NSString *groupName);
+
+static WAMLGInstallRegisteredGlassInMaterial_t wamLGInstallRegisteredGlassInMaterial = NULL;
+
+// LGInstallRegisteredGlassInMaterial's `prefix` is matched with an exact strcmp against a FIXED, compile-time
+// table of ~29 known host identifiers (Shared/LGHostRegistry.h's kLGHostRegistry) — it is NOT a place to
+// register a brand-new third-party identity (confirmed empirically: a synthetic prefix always returns nil,
+// silently, with no error). So we borrow the closest REAL, already-supported host instead of inventing one:
+// "SearchPill" for our bottom search platter (an exact semantic + geometric match) and "PrefsButton" (a
+// generic rounded-button glass style) for everything else. Each surface must ALSO be individually enabled in
+// Liquid (Gl)ass's own settings app — lgHostEnabled(prefix) gates on that per-host user preference, which we
+// have no way to set from here.
+static NSString *const kWAMLGPrefixSearchPill = @"SearchPill";
+static NSString *const kWAMLGPrefixButton = @"PrefsButton";
+
+// Resolved at most once per launch. Safe to call repeatedly — cheap after the first hit.
+static BOOL wamLiquidAssAvailable(void) {
+    static BOOL checked = NO, available = NO;
+    if (!checked) {
+        checked = YES;
+        wamLGInstallRegisteredGlassInMaterial =
+            (WAMLGInstallRegisteredGlassInMaterial_t)dlsym(RTLD_DEFAULT, "LGInstallRegisteredGlassInMaterial");
+        available = (wamLGInstallRegisteredGlassInMaterial != NULL);
+    }
+    return available;
+}
+
+BOOL isLiquidAssCompatEnabled(void) {
+    id v = loadPrefs()[@"isLiquidAssCompatEnabled"];
+    return v ? [v boolValue] : NO;
+}
+
+static BOOL wamShouldUseLiquidAssGlass(void) {
+    return isTweakEnabled() && isLiquidAssCompatEnabled() && wamLiquidAssAvailable();
+}
+
+// The glass can't be made to sample our own live Modern NavBar blur (confirmed on device: it ignores it
+// entirely, live-sampling everything else fine). So don't try to make it sample anything — capture an actual
+// snapshot of the navbar exactly where the platter sits (same gradient, same opacity, same color it would
+// show if the platter weren't there) and stamp that image on top of the glass instead, below the button's
+// own glyph/text. It reads as if the navbar shows through normally, because it genuinely is a picture of it.
+static UIView *wamFindBarBackgroundForView(UIView *v) {
+    UIView *bar = v;
+    while (bar && ![bar isKindOfClass:[UINavigationBar class]]) bar = bar.superview;
+    if (!bar) return nil;
+    Class barBgCls = NSClassFromString(@"_UIBarBackground");
+    for (UIView *sub in bar.subviews) if ([sub isKindOfClass:barBgCls]) return sub;
+    return nil;
+}
+
+static const NSInteger kWAMNavSnapshotTag = 4421;
+
+static char kWAMNavSnapshotKey;
+
+static void wamCaptureNavSnapshot(UIView *container, CGFloat cornerRadius) {
+    UIView *host = container.superview;
+    UIImageView *snap = objc_getAssociatedObject(container, &kWAMNavSnapshotKey);
+    BOOL shouldRun = wamShouldUseLiquidAssGlass() && host != nil && container.window != nil;
+    if (!shouldRun) {
+        if (snap) [snap removeFromSuperview];
+        return;
+    }
+    // Refreshed on normal layout passes only — no periodic timer. The navbar's own gradient/tint is slow-
+    // changing and already translucent, so it doesn't need near-live tracking, and a repeating capture was
+    // both expensive and produced a visible growth/corruption glitch on device.
+    UIView *barBg = wamFindBarBackgroundForView(host);
+    if (!barBg || barBg.bounds.size.width < 1.0 || barBg.bounds.size.height < 1.0) {
+        if (snap) [snap removeFromSuperview];
+        return;
+    }
+    CGRect rectInBarBg = [host convertRect:container.frame toView:barBg];
+    rectInBarBg = CGRectIntersection(rectInBarBg, barBg.bounds);
+    if (CGRectIsEmpty(rectInBarBg)) {
+        if (snap) [snap removeFromSuperview];
+        return;
+    }
+
+    UIGraphicsImageRendererFormat *fmt = [UIGraphicsImageRendererFormat preferredFormat];
+    fmt.opaque = NO;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithBounds:barBg.bounds format:fmt];
+    UIImage *full = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        [barBg drawViewHierarchyInRect:barBg.bounds afterScreenUpdates:NO];
+    }];
+    CGFloat scale = full.scale;
+    CGRect cropRect = CGRectMake(rectInBarBg.origin.x * scale, rectInBarBg.origin.y * scale,
+                                 rectInBarBg.size.width * scale, rectInBarBg.size.height * scale);
+    CGImageRef cropped = CGImageCreateWithImageInRect(full.CGImage, cropRect);
+    if (!cropped) {
+        if (snap) [snap removeFromSuperview];
+        return;
+    }
+    UIImage *croppedImage = [UIImage imageWithCGImage:cropped scale:scale orientation:UIImageOrientationUp];
+    CGImageRelease(cropped);
+
+    if (!snap) {
+        snap = [[UIImageView alloc] init];
+        snap.userInteractionEnabled = NO;
+        snap.clipsToBounds = YES;
+        // A real UIImageView with a real .image — wamApplyNavButtonPlatter's glyph scan (which looks for
+        // exactly that, to compute the platter's own bounding box) was picking this up as a phantom glyph,
+        // feeding its own growing frame back into itself each pass. Tag it so that scan can skip it.
+        snap.tag = kWAMNavSnapshotTag;
+        snap.layer.cornerRadius = cornerRadius;
+        if (@available(iOS 13.0, *)) snap.layer.cornerCurve = kCACornerCurveContinuous;
+        objc_setAssociatedObject(container, &kWAMNavSnapshotKey, snap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    snap.image = croppedImage;
+    snap.frame = container.frame;
+    if (fabs(snap.layer.cornerRadius - cornerRadius) > 0.5) snap.layer.cornerRadius = cornerRadius;
+    // Must sit above `container` itself, not just above the glass — container holds fxv, which is our OWN
+    // real stock blur (left untouched, per the purely-additive design). Landing the snapshot behind that
+    // washes it out completely, since fxv's own translucent blur renders on top of it.
+    if (snap.superview != host || [host.subviews indexOfObject:snap] < [host.subviews indexOfObject:container]) {
+        [host insertSubview:snap aboveSubview:container];
+    }
+}
+
+static void wamUpdateNavSnapshot(UIView *container, CGFloat cornerRadius) {
+    wamCaptureNavSnapshot(container, cornerRadius);
+    // Returning from a chat (or any nav transition) reliably triggers a layout pass on these buttons WHILE
+    // the pop animation is still interpolating alpha/tint — capturing then freezes that transient, wrong-
+    // looking frame, with nothing to correct it since there's no periodic refresh anymore. Debounced one-shot
+    // re-capture: every real layout call cancels any pending one and schedules a fresh one shortly out, so it
+    // only actually fires once things stop moving and settle on the real post-transition look.
+    static char kWAMNavSnapshotPendingKey;
+    dispatch_block_t pending = objc_getAssociatedObject(container, &kWAMNavSnapshotPendingKey);
+    if (pending) dispatch_block_cancel(pending);
+    __weak UIView *weakContainer = container;
+    dispatch_block_t block = dispatch_block_create(0, ^{
+        UIView *strongContainer = weakContainer;
+        if (strongContainer) wamCaptureNavSnapshot(strongContainer, cornerRadius);
+    });
+    objc_setAssociatedObject(container, &kWAMNavSnapshotPendingKey, block, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), block);
+}
+
+
+// Swap `fxv` (one of our stock UIVisualEffectView blurs) for Liquid (Gl)ass glass installed into
+// `hostContainer`, or restore the stock blur if the feature is off/unavailable/declined. `key` must be a
+// distinct static address per call site (e.g. `static char kSomeKey;`) — it's how repeat calls find and
+// update the SAME glass instance instead of installing a new one every layout pass, and every caller gets
+// its own dedicated key rather than sharing one. `prefix` must be one of Liquid (Gl)ass's own known host
+// identifiers (see kWAMLGPrefix* above).
+static void wamApplyLiquidAssGlass(UIView *hostContainer, UIVisualEffectView *fxv, CGFloat cornerRadius,
+                                    const void *key, NSString *prefix) {
+    UIView *glass = objc_getAssociatedObject(hostContainer, key);
+    if (!wamShouldUseLiquidAssGlass() || !prefix) {
+        if (glass) {
+            [glass removeFromSuperview];
+            objc_setAssociatedObject(hostContainer, key, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+    if (!glass) {
+        @try {
+            glass = wamLGInstallRegisteredGlassInMaterial(hostContainer, key, prefix,
+                                                          UIEdgeInsetsZero, cornerRadius, @"WhatAMess");
+        } @catch (NSException *e) {
+            glass = nil;   // undocumented third-party API — never let a beta integration crash the host app
+        }
+        if (glass) {
+            objc_setAssociatedObject(hostContainer, key, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+    if (!glass) return;
+    // Repeated attempts to HIDE our own blur/content so glass could take its place kept breaking whatever
+    // lived inside fxv.contentView (the search field vanishing, the platter tint vanishing, then a z-position
+    // hack breaking BOTH further) — every one of those was a variation on "make room for glass by removing
+    // something real". So stop doing that: fxv (search field, tint overlay, everything) is left completely
+    // untouched, exactly as it always renders without Liquid (Gl)ass. Glass is added PURELY as an extra
+    // backdrop layer sitting behind it — since our own blur is translucent (UIBlurEffectStyleRegular, not
+    // opaque), the glass refraction still contributes visible depth through it. Lower risk, and nothing that
+    // already worked can regress from this.
+    UIView *glassParent = glass.superview;
+    CGRect targetFrame = (glassParent && glassParent != hostContainer)
+        ? [hostContainer convertRect:hostContainer.bounds toView:glassParent]
+        : hostContainer.bounds;
+    glass.frame = targetFrame;
+    glass.layer.cornerRadius = cornerRadius;
+    if (@available(iOS 13.0, *)) glass.layer.cornerCurve = kCACornerCurveContinuous;
+    glass.clipsToBounds = YES;
+    if (glassParent == hostContainer) {
+        [hostContainer sendSubviewToBack:glass];
+    } else if (glassParent && [glassParent.subviews containsObject:hostContainer]) {
+        [glassParent insertSubview:glass belowSubview:hostContainer];
+    }
 }
 
 BOOL isSeparatorsEnabled() {
@@ -1211,14 +1597,22 @@ static void updateDarkModeFromTraits(UITraitCollection *tc) {
 
 BOOL isDarkMode() {
     if (@available(iOS 13.0, *)) {
-        if (isiOS15()) {
-            UIUserInterfaceStyle screenStyle = [UIScreen mainScreen].traitCollection.userInterfaceStyle;
-            if (screenStyle != UIUserInterfaceStyleUnspecified) {
-                return screenStyle == UIUserInterfaceStyleDark;
-            }
-            return gWAMIsDarkModeOnIOS15;
+        // UIScreen's trait collection reports the system appearance stably in ANY call context. Prefer
+        // it everywhere. [UITraitCollection currentTraitCollection] is only valid inside UIKit layout /
+        // trait callbacks and returns Unspecified elsewhere (heartbeat, notification handlers, timers) —
+        // relying on it there misreported light mode, which flipped the resolved image path and the
+        // isChatImageBgEnabled key, making the (fallback-less) global background blink out on scroll.
+        UIUserInterfaceStyle screenStyle = [UIScreen mainScreen].traitCollection.userInterfaceStyle;
+        if (screenStyle != UIUserInterfaceStyleUnspecified) {
+            gWAMIsDarkModeOnIOS15 = (screenStyle == UIUserInterfaceStyleDark);   // keep the cache warm
+            return screenStyle == UIUserInterfaceStyleDark;
         }
-        return [UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark;
+        UIUserInterfaceStyle cur = [UITraitCollection currentTraitCollection].userInterfaceStyle;
+        if (cur != UIUserInterfaceStyleUnspecified) {
+            gWAMIsDarkModeOnIOS15 = (cur == UIUserInterfaceStyleDark);
+            return cur == UIUserInterfaceStyleDark;
+        }
+        return gWAMIsDarkModeOnIOS15;   // last known-good, when neither source is specified
     }
     return NO;
 }
@@ -1391,7 +1785,7 @@ static BOOL isAdvancedTintEnabled() {
 }
 
 static UIColor *resolveAdvancedColorForKey(NSString *key, UIColor *fallback) {
-    if (gWAMChatIsActiveSurface) {
+    if (gWAMChatIsActiveSurface && !gWAMForceGlobalColorResolve) {
         NSString *name = getCurrentContactName();
         if (name.length && perContactOverridesEnabled(name)) {
             id pc = getPerContactOverride(name, key);
@@ -1413,7 +1807,7 @@ static UIColor *resolveAdvancedColorForKey(NSString *key, UIColor *fallback) {
 
 static BOOL isAdvancedValueExplicitlySet(NSString *lightKey, NSString *darkKey) {
     NSString *key = isDarkMode() ? darkKey : lightKey;
-    if (gWAMChatIsActiveSurface) {
+    if (gWAMChatIsActiveSurface && !gWAMForceGlobalColorResolve) {
         NSString *name = getCurrentContactName();
         if (name.length && perContactOverridesEnabled(name)) {
             if (getPerContactOverride(name, key)) return YES;
@@ -1644,7 +2038,7 @@ static UIImage *wamChatBackgroundImage(NSString *path, CGFloat blurAmount) {
 
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:nil];
     NSTimeInterval mtime = [(NSDate *)attrs[NSFileModificationDate] timeIntervalSince1970];
-    NSString *key = [NSString stringWithFormat:@"%@|%.2f|%.0f", path, blurAmount, mtime];
+    NSString *key = [NSString stringWithFormat:@"%@|%.2f|%.0f|%lu", path, blurAmount, mtime, (unsigned long)gWAMChatBgGen];
 
     UIImage *hit = [cache objectForKey:key];
     if (hit) return hit;
@@ -1901,6 +2295,13 @@ static UIColor *getPinnedBubbleTextColor() {
 static UIColor *getNavBarTintColor() {
     NSString *key = isDarkMode() ? @"navBarTintColorDark" : @"navBarTintColor";
     return colorFromHex(effectiveValueForKey(key)) ?: getSystemTintColor();
+}
+
+// Optional tint color for the nav-button/name blur platters. nil → plain frosted blur.
+static UIColor *getNavPlatterColor(BOOL global) {
+    NSString *key = isDarkMode() ? @"navPlatterColorDark" : @"navPlatterColor";
+    id v = global ? loadPrefs()[key] : effectiveValueForKey(key);   // conv list = global, chat = per-contact
+    return colorFromHex(v);
 }
 
 static UIColor *getNavBarTintColorForView(UIView *view) {
@@ -3554,8 +3955,10 @@ static const void *kWAMRowReloadsAssocKey = &kWAMRowReloadsAssocKey;
            @"symbol": @"rectangle.topthird.inset.filled",
            @"tint": [UIColor colorWithRed:0.95 green:0.45 blue:0.18 alpha:1.0],
            @"specs": @[
-               @{@"label": @"Tint Color",    @"light": @"navBarTintColor",     @"dark": @"navBarTintColorDark",     @"type": @"color"},
-               @{@"label": @"Contact Name",  @"light": @"chatContactNameColor", @"dark": @"chatContactNameColorDark", @"type": @"color"},
+               @{@"label": @"Tint Color",     @"light": @"navBarTintColor",       @"dark": @"navBarTintColorDark",       @"type": @"color"},
+               @{@"label": @"Contact Name",   @"light": @"chatContactNameColor",  @"dark": @"chatContactNameColorDark",  @"type": @"color"},
+               @{@"label": @"Button Platters",@"light": @"isNavButtonBlurEnabled",@"dark": @"isNavButtonBlurEnabledDark",@"type": @"bool"},
+               @{@"label": @"Platter Color",  @"light": @"navPlatterColor",       @"dark": @"navPlatterColorDark",       @"type": @"color"},
            ]},
         @{ @"title": @"Cell Tint",
            @"symbol": @"rectangle.stack.fill",
@@ -4076,6 +4479,215 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
 
 %end
 
+static const NSInteger kWAMBottomSearchTag = 4410;
+static const NSInteger kWAMBottomSearchTintTag = 4412;
+static const NSInteger kWAMSearchGlyphOverlayTag = 4415;
+static const NSInteger kWAMBottomScreenBlurTag = 4420;
+static const NSInteger kWAMBottomScreenBlurTintTag = 4421;
+static char kWAMBottomSearchCtrlKey;
+static char kWAMBottomSearchContainerKey;
+static char kWAMSearchOrigPlaceholderKey;
+static char kWAMSearchMyMagKey;   // our own leftView magnifier (immune to the system's per-contact re-tint)
+static CGRect gWAMSearchKbFrameWin = {{0.0, 0.0}, {0.0, 0.0}};
+
+BOOL isBottomBlurEnabled() {
+    NSString *key = isDarkMode() ? @"isBottomBlurEnabledDark" : @"isBottomBlurEnabled";
+    id v = effectiveValueForKey(key);
+    return v ? [v boolValue] : NO;
+}
+
+static UIColor *getBottomBlurTintColor() {
+    NSString *key = isDarkMode() ? @"bottomBlurTintColorDark" : @"bottomBlurTintColor";
+    return colorFromHex(effectiveValueForKey(key));
+}
+
+// A tinted, progressive blur spanning the full screen width at the very bottom, behind the search bar
+// platter — same visual language as the modern navbar's top/bottom fade (blur + gradient-mask + optional flat
+// tint), but its own independently-toggled feature, listed with the platter options and gated on them (the
+// bottom search platter only exists when Button Platters is on, so this has no meaning without it either).
+static void wamSetupBottomScreenBlur(UIView *host, UIView *container) {
+    BOOL on = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal() && isBottomBlurEnabled();
+    UIVisualEffectView *blur = nil;
+    for (UIView *sub in host.subviews) if (sub.tag == kWAMBottomScreenBlurTag) { blur = (UIVisualEffectView *)sub; break; }
+    if (!on) { [blur removeFromSuperview]; return; }
+    if (host.bounds.size.width < 100.0) return;   // skip transitional/degenerate geometry, like the search platter does
+
+    CGFloat h = 210.0;
+    CGFloat home = host.window ? host.window.safeAreaInsets.bottom : 0.0;
+    CGRect frame = CGRectMake(0.0, host.bounds.size.height - h, host.bounds.size.width, h + home);
+
+    if (!blur) {
+        blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular]];
+        blur.tag = kWAMBottomScreenBlurTag;
+        blur.userInteractionEnabled = NO;
+        blur.clipsToBounds = YES;
+        // Sit just behind the search platter (so the platter's own blur/shadow reads on top of this wash),
+        // but above the list content beneath — that's what actually gets blurred.
+        if (container.superview == host) [host insertSubview:blur belowSubview:container];
+        else [host addSubview:blur];
+    }
+    blur.frame = frame;
+
+    // Colorless frosted blur — same as the search platter's own blur — the stock _UIVisualEffectSubview
+    // carries a dark backing that muddies the fade; clear it so only our gradient + optional tint show.
+    Class subCls = NSClassFromString(@"_UIVisualEffectSubview");
+    for (UIView *sub in blur.subviews)
+        if ([sub isKindOfClass:subCls]) sub.backgroundColor = [UIColor clearColor];
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    CAGradientLayer *mask = [blur.layer.mask isKindOfClass:[CAGradientLayer class]] ? (CAGradientLayer *)blur.layer.mask : nil;
+    if (!mask) { mask = [CAGradientLayer layer]; blur.layer.mask = mask; }
+    mask.frame = blur.bounds;
+    // Smoothstep (3t²-2t³) easing across evenly-spaced stops, rather than a few hand-picked jumps — reads as
+    // one continuous fade instead of visibly distinct bands.
+    mask.colors = @[
+        (id)[UIColor colorWithWhite:0.0 alpha:0.0].CGColor,      // t=0.00
+        (id)[UIColor colorWithWhite:0.0 alpha:0.061].CGColor,    // t=0.15
+        (id)[UIColor colorWithWhite:0.0 alpha:0.216].CGColor,    // t=0.30
+        (id)[UIColor colorWithWhite:0.0 alpha:0.500].CGColor,    // t=0.50
+        (id)[UIColor colorWithWhite:0.0 alpha:0.784].CGColor,    // t=0.70
+        (id)[UIColor colorWithWhite:0.0 alpha:0.939].CGColor,    // t=0.85
+        (id)[UIColor colorWithWhite:0.0 alpha:1.0].CGColor       // t=1.00
+    ];
+    mask.locations = @[@0.0, @0.15, @0.3, @0.5, @0.7, @0.85, @1.0];
+    [CATransaction commit];
+
+    UIColor *tint = getBottomBlurTintColor();
+    UIView *tintView = nil;
+    for (UIView *sub in blur.contentView.subviews) if (sub.tag == kWAMBottomScreenBlurTintTag) { tintView = sub; break; }
+    if (tint) {
+        if (!tintView) {
+            tintView = [[UIView alloc] init];
+            tintView.tag = kWAMBottomScreenBlurTintTag;
+            tintView.userInteractionEnabled = NO;
+            [blur.contentView addSubview:tintView];
+        }
+        tintView.backgroundColor = tint;
+        tintView.frame = blur.contentView.bounds;
+    } else if (tintView) {
+        [tintView removeFromSuperview];
+    }
+}
+static BOOL gWAMSearchKbVisible = NO;
+static CGFloat gWAMSearchRestMargin = -1.0;   // landscape resting left margin, reused when active so it doesn't jump
+
+static BOOL wamIsOurBottomSearchDescendant(UIView *v) {
+    for (UIView *a = v; a; a = a.superview) if (a.tag == kWAMBottomSearchTag) return YES;
+    return NO;
+}
+
+static char kWAMGlyphBakedColorKey;
+
+// Recolour every small icon-sized image view under `root`, skipping `skip`'s subtree (the dictation mic
+// button, already correctly coloured elsewhere). This doesn't assume any specific property name (leftView,
+// etc.) — UISearchTextField's real magnifier render path has proven immune to every leftView-based approach
+// (setTintColor, image replace, view replace, hide via leftViewMode), which means it isn't rendered through
+// leftView at all while editing. Hunting by geometry instead sidesteps whatever private view it actually is.
+static void wamForceRecolorSearchGlyphs(UIView *root, UIColor *color, UIView *skip) {
+    if (!root || !color) return;
+    for (UIView *v in root.subviews) {
+        if (v == skip || [v isDescendantOfView:skip]) continue;
+        if ([v isKindOfClass:[UIImageView class]]) {
+            UIImageView *iv = (UIImageView *)v;
+            CGFloat w = iv.bounds.size.width, h = iv.bounds.size.height;
+            if (iv.image && w >= 8.0 && w <= 28.0 && h >= 8.0 && h <= 28.0) {
+                UIColor *already = objc_getAssociatedObject(iv, &kWAMGlyphBakedColorKey);
+                if (![already isEqual:color]) {
+                    UIImage *tmpl = [iv.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                    iv.image = [tmpl imageWithTintColor:color renderingMode:UIImageRenderingModeAlwaysOriginal];
+                    objc_setAssociatedObject(iv, &kWAMGlyphBakedColorKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
+        }
+        wamForceRecolorSearchGlyphs(v, color, skip);
+    }
+}
+
+// UISearchBar re-centres its (natural-width) field on every layout pass, undoing the fill we set in
+// wamSetupBottomSearch. For OUR bottom-search bar only (hosted inside our blur container, tag 4410), in the
+// landscape split, reassert the fill AFTER the bar's own layout so the field fills the pill for good. Left
+// alone while actively editing.
+%hook UISearchBar
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled() || !wamIsLandscape()) return;
+    if (!wamIsOurBottomSearchDescendant(self.superview)) return;
+    // The search bar is a conversation-list (global) element. In the split its ancestors carry the open
+    // chat's per-contact tint, which the Cancel button + magnifier inherit. Pin them to the GLOBAL tint so
+    // they follow the global side, not the last chat.
+    BOOL prevG = gWAMForceGlobalColorResolve;
+    gWAMForceGlobalColorResolve = YES;
+    UIColor *globalTint = getSystemTintColor();
+    gWAMForceGlobalColorResolve = prevG;
+    if (!globalTint) globalTint = [UIColor systemBlueColor];   // no custom global tint → system default
+    if (![self.tintColor isEqual:globalTint]) self.tintColor = globalTint;
+    if (@available(iOS 13.0, *)) {
+        UITextField *tf = self.searchTextField;
+        if (!tf || tf.bounds.size.height <= 0.0) return;
+        // The real search-magnifier icon is immune to every leftView-based recolour (proven across many
+        // attempts) — while editing specifically, it isn't rendered via leftView at all. Hunt and recolour
+        // any small icon-shaped image view in the WHOLE bar instead, skipping the dictation mic (already
+        // correct via its own tintColor).
+        {
+            BOOL pg2 = gWAMForceGlobalColorResolve; gWAMForceGlobalColorResolve = YES;
+            BOOL tActive2 = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark") ||
+                            isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark");
+            UIColor *glyphColor2 = tActive2 ? getAdvancedSearchFieldColor() : nil;
+            gWAMForceGlobalColorResolve = pg2;
+            if (glyphColor2) wamForceRecolorSearchGlyphs(self, glyphColor2, tf.rightView);
+        }
+        // Field fills from a left inset to the right edge — or, while editing, to just before the Cancel
+        // button — so it stretches across the pill and left-aligns instead of sitting tiny in the middle.
+        // Always fill the field to the pill's right edge. The Cancel button (when editing) sits OUTSIDE the
+        // pill to its right — normal search-bar behaviour — so it must NOT constrain the field width.
+        CGFloat leftX = 8.0, rightX = self.bounds.size.width - 8.0;
+        if (tf.isFirstResponder) {
+            // Editing mode respects textAlignment (unlike the resting centred-placeholder style), so pin the
+            // cursor / text / glyph to the left instead of floating in the middle of the field.
+            tf.textAlignment = NSTextAlignmentLeft;
+            // Find the rightmost button (Cancel) only to force its colour to the global tint.
+            UIButton *cancel = nil;
+            CGFloat cancelX = -CGFLOAT_MAX;
+            NSMutableArray *q = [NSMutableArray arrayWithArray:self.subviews];
+            while (q.count) {
+                UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                if ([v isDescendantOfView:tf]) continue;
+                if ([v isKindOfClass:[UIButton class]] && v.bounds.size.width > 0) {
+                    CGFloat x = [v convertRect:v.bounds toView:self].origin.x;
+                    if (x > cancelX) { cancelX = x; cancel = (UIButton *)v; }
+                }
+                [q addObjectsFromArray:v.subviews];
+            }
+            if (cancel) {
+                cancel.tintColor = globalTint;
+                [cancel setTitleColor:globalTint forState:UIControlStateNormal];
+                [cancel setTitleColor:globalTint forState:UIControlStateHighlighted];
+            }
+        }
+        CGFloat wantW = rightX - leftX;
+        if (wantW < 40.0) return;
+        CGFloat wantY = (self.bounds.size.height - tf.frame.size.height) / 2.0;   // vertically centre in the pill
+        if (fabs(tf.frame.size.width - wantW) > 1.0 || fabs(tf.frame.origin.x - leftX) > 1.0 ||
+            fabs(tf.frame.origin.y - wantY) > 1.0) {
+            CGRect r = tf.frame;
+            r.origin.x = leftX;
+            r.size.width = wantW;
+            r.origin.y = wantY;
+            tf.frame = r;
+            [tf layoutIfNeeded];
+        }
+        // (Dictation-icon vertical centring is done in the UISearchTextField layoutSubviews hook, which runs
+        // after the field positions its rightView, so it isn't reset.)
+        // Once text is typed, hide our left-pinned placeholder overlay so it doesn't sit over the real text.
+        UIView *ov = [self.superview viewWithTag:kWAMSearchGlyphOverlayTag];
+        if (ov && tf.text.length > 0) ov.hidden = YES;
+    }
+}
+
+%end
+
 %hook CKConversationListCollectionViewController
 
 -(void)viewWillAppear:(BOOL)animated {
@@ -4085,11 +4697,27 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
     [self applyCustomNavTitle];
 }
 
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // Rotation/split-view transition: recompute the relocated bottom search platter and the nav-bar
+    // layout against the settled post-rotation size (mid-transition the platter came out mis-sized and
+    // the title overlapped the Edit button).
+    [coordinator animateAlongsideTransition:nil completion:^(__unused id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        wamForceLayoutAllWindows();
+        [self wamSetupBottomSearch];
+        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    }];
+}
+
 -(void)viewDidAppear:(BOOL)animated {
     %orig;
     if (isTweakEnabled()) {
         [self handlePrefsChanged];
     }
+
+    if (isTweakEnabled()) [self wamSetupBottomSearch];
+
     if (!isTweakEnabled() || gWAMChangelogShownThisLaunch) return;
     if (!shouldShowChangelog()) return;
     gWAMChangelogShownThisLaunch = YES;
@@ -4135,6 +4763,322 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
         selector:@selector(handlePrefsChanged)
         name:kPrefsChangedNotification
         object:nil];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(wamKeyboardChanged:)
+        name:UIKeyboardWillChangeFrameNotification
+        object:nil];
+}
+
+%new
+-(void)wamSetupBottomSearch {
+    UIView *listView = self.view;
+    if (!listView) return;
+
+    UISearchController *sc = objc_getAssociatedObject(self, &kWAMBottomSearchCtrlKey);
+    UIView *container = objc_getAssociatedObject(self, &kWAMBottomSearchContainerKey);
+    BOOL on = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal();
+
+    if (!on) {
+        // Toggle off: hand the search bar back to the nav bar and drop the bottom platter (+ its blur wash).
+        if (sc) {
+            self.navigationItem.searchController = sc;
+            objc_setAssociatedObject(self, &kWAMBottomSearchCtrlKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [container removeFromSuperview];
+        objc_setAssociatedObject(self, &kWAMBottomSearchContainerKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [[listView viewWithTag:kWAMBottomScreenBlurTag] removeFromSuperview];
+        return;
+    }
+
+    // Detach from the nav bar once; retain the controller so it keeps driving search.
+    if (!sc) {
+        sc = self.navigationItem.searchController;
+        if (!sc) return;
+        objc_setAssociatedObject(self, &kWAMBottomSearchCtrlKey, sc, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        self.navigationItem.searchController = nil;
+    }
+    UISearchBar *sb = sc.searchBar;
+    if (!sb) return;
+
+    UIVisualEffectView *fxv = nil;
+    if (!container) {
+        container = [[UIView alloc] initWithFrame:CGRectZero];
+        container.tag = kWAMBottomSearchTag;
+        container.clipsToBounds = NO;
+        container.layer.shadowColor = [UIColor blackColor].CGColor;
+        container.layer.shadowOpacity = 0.26;
+        container.layer.shadowRadius = 6.0;
+        container.layer.shadowOffset = CGSizeMake(0.0, 2.0);
+        fxv = [[UIVisualEffectView alloc] initWithEffect:
+               [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular]];
+        fxv.clipsToBounds = YES;
+        [container addSubview:fxv];
+        objc_setAssociatedObject(self, &kWAMBottomSearchContainerKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } else {
+        fxv = (UIVisualEffectView *)container.subviews.firstObject;
+    }
+
+    // While the search controller is active it presents itself over the list, so re-home the platter
+    // inside that presentation (on top of the results); otherwise rest it in the list view.
+    BOOL active = sc.isActive && [self presentedViewController] == sc &&
+                  sc.viewIfLoaded && sc.viewIfLoaded.window;
+    UIView *host = active ? sc.view : listView;
+    // Skip transitional/degenerate host geometry: mid-rotation the wrapper is briefly 0-wide (platter
+    // came out at x=-16) — leave the last-good layout until it settles to a real width.
+    if (host.bounds.size.width < 200.0) return;
+    static char kWAMLiquidAssSearchKey;
+    if (container.superview != host) {
+        // Host is switching (list <-> the active-search presentation view) — any cached Liquid (Gl)ass glass
+        // was parented as a sibling of container inside the OLD host, so it'd be left behind/orphaned there
+        // once container moves, instead of following it. Drop it so it gets freshly reinstalled against the
+        // new host on this pass (this is exactly why the glass background vanished on tapping into search).
+        UIView *staleGlass = objc_getAssociatedObject(container, &kWAMLiquidAssSearchKey);
+        if (staleGlass) {
+            [staleGlass removeFromSuperview];
+            objc_setAssociatedObject(container, &kWAMLiquidAssSearchKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [host addSubview:container];
+    }
+    wamSetupBottomScreenBlur(host, container);
+
+    // Keep the bar in our platter; the nav bar / controller tries to reclaim it, so grab it back here.
+    if (self.navigationItem.searchController == sc) self.navigationItem.searchController = nil;
+    // sb is a SIBLING of container in `host`, not nested inside fxv.contentView — see the Liquid (Gl)ass
+    // comment below for why. wamIsOurBottomSearchDescendant() walks UP looking for kWAMBottomSearchTag, so
+    // tag sb directly too (the walk checks the starting view itself first) — otherwise every hook gating on
+    // "is this our search bar" (landscape fill, magnifier colour/hide, etc.) would stop matching.
+    if (sb.superview != host) [host addSubview:sb];
+    sb.tag = kWAMBottomSearchTag;
+    sb.searchBarStyle = UISearchBarStyleMinimal;
+    sb.backgroundImage = [UIImage new];
+    if (@available(iOS 13.0, *)) sb.searchTextField.backgroundColor = [UIColor clearColor];
+
+    // Geometry: a pill pinned near the bottom, lifted above the keyboard while it's up (a touch higher
+    // and inset left while floating).
+    CGFloat margin = 16.0;         // left inset
+    CGFloat rightMargin = 16.0;    // right inset (kept constant so the right edge doesn't move)
+    if (wamIsLandscape()) {
+        // Shave the left so the platter's left lines up with the Edit button's left in the narrow split
+        // column. Compute it only at REST (the nav bar's Edit button is a stable reference there) and cache
+        // it; while searching, reuse the cached value verbatim so the pill's left edge doesn't grow/jump when
+        // it's tapped.
+        if (!active) {
+            CGFloat editLeft = -1.0;
+            UINavigationBar *navBar = self.navigationController.navigationBar;
+            if (navBar && navBar.window) {
+                NSMutableArray *q = [NSMutableArray arrayWithArray:navBar.subviews];
+                while (q.count) {
+                    UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                    if ([v isKindOfClass:%c(_UIButtonBarButton)] && v.bounds.size.width > 0) {
+                        CGRect f = [v convertRect:v.bounds toView:host];
+                        if (editLeft < 0 || f.origin.x < editLeft) editLeft = f.origin.x;
+                    }
+                    [q addObjectsFromArray:v.subviews];
+                }
+            }
+            if (editLeft >= 0) margin = editLeft;
+            else if (host.window) margin = host.window.safeAreaInsets.left + 4.0;
+            gWAMSearchRestMargin = margin;
+        } else if (gWAMSearchRestMargin >= 0.0) {
+            margin = gWAMSearchRestMargin;
+        } else if (host.window) {
+            margin = host.window.safeAreaInsets.left + 4.0;
+        }
+    }
+    CGFloat h = 50.0;
+    CGFloat w = host.bounds.size.width - margin - rightMargin;
+    CGFloat bottomEdge;
+    CGFloat leftShift = 0.0;
+    // Only lift above the keyboard while search is actually engaged. The keyboard-state globals are
+    // updated only while the list is on-screen, so they can go stale YES if the keyboard dismissed while
+    // the list was covered (e.g. Messages opened straight into a chat via a notification, then popped
+    // back) — trusting the flag alone stranded the platter mid-screen. Gating on the active search keeps
+    // it resting at the bottom whenever the user isn't searching.
+    if (gWAMSearchKbVisible && sc.isActive) {
+        CGRect kb = [host convertRect:gWAMSearchKbFrameWin fromView:nil];
+        bottomEdge = kb.origin.y - 12.0;
+        leftShift = wamIsLandscape() ? 0.0 : 3.0;   // don't nudge the Edit-aligned left in the split
+    } else {
+        CGFloat home = host.window ? host.window.safeAreaInsets.bottom : 0.0;
+        bottomEdge = host.bounds.size.height - home - 8.0;
+    }
+    container.frame = CGRectMake(margin - leftShift, bottomEdge - h, w, h);
+
+    CGFloat radius = h / 2.0;
+    fxv.frame = container.bounds;
+    fxv.layer.cornerRadius = radius;
+    if (@available(iOS 13.0, *)) fxv.layer.cornerCurve = kCACornerCurveContinuous;
+    container.layer.shadowPath =
+        [UIBezierPath bezierPathWithRoundedRect:container.bounds cornerRadius:radius].CGPath;
+
+    // Liquid (Gl)ass Compatibility (beta). Every technique that kept sb NESTED inside fxv.contentView (which
+    // itself sits inside the same hostContainer glass is installed behind) made the search field vanish,
+    // across five distinct approaches and two different borrowed surfaces — while nav buttons, where the real
+    // glyph is a SIBLING of hostContainer rather than nested inside it, always rendered correctly. So sb was
+    // restructured (above) to be a sibling of container in `host` too, matching that working structure exactly
+    // instead of trying another variation of the nested approach. (kWAMLiquidAssSearchKey is declared earlier
+    // in this function, where it's also used to invalidate stale glass on a host switch.)
+    // SearchPill, not PrefsButton — PrefsButton's geometry (tuned for small square buttons) produces a
+    // visible refraction seam/ridge on a wide 398×50 pill; SearchPill's own registry values are tuned for
+    // exactly this shape. (Confirmed on device that nav buttons losing their navbar-blur layering happens
+    // with search glass active EITHER way, same surface or different — so this isn't a "different surfaces
+    // conflict" as first thought; using SearchPill costs nothing extra there.)
+    wamApplyLiquidAssGlass(container, fxv, radius, &kWAMLiquidAssSearchKey, kWAMLGPrefixSearchPill);
+
+    // The bar frame handles the left nudge + (when active) the right inset to clear Cancel. Vertical
+    // position is set on the text field directly and centred in the pill — the bar's own field layout
+    // drifts after the field has been edited, so centring on the field height keeps it stable.
+    CGFloat cw = fxv.contentView.bounds.size.width, ch = fxv.contentView.bounds.size.height;
+    // sb's frame is now in `host`'s coordinate space (it's a sibling of container there), not fxv.contentView's
+    // — anchor its origin to container's own frame origin (same -6/0 offset as before) so it lands in exactly
+    // the same visual position; width/height are unaffected by which view it's parented under.
+    CGFloat sbX = container.frame.origin.x - 6.0, sbY = container.frame.origin.y;
+    sb.frame = active ? CGRectMake(sbX, sbY, cw - 12.0, ch)
+                      : CGRectMake(sbX, sbY, cw, ch);
+    [sb layoutIfNeeded];
+
+    if (@available(iOS 13.0, *)) {
+        UITextField *tf = sb.searchTextField;
+        if (tf && tf.bounds.size.height > 0.0) {
+            CGRect r = tf.frame;
+            r.origin.y = (ch - r.size.height) / 2.0;   // vertically centre in the pill
+            // Fill the pill so "🔍 Search" sits left and the dictation icon rides the right edge — LANDSCAPE
+            // only (portrait keeps the stock field layout). UISearchBar re-centres the field on its own later
+            // layout passes, so the durable enforcement lives in the UISearchBar layoutSubviews hook below;
+            // this is just the initial set.
+            if (!active && wamIsLandscape()) { r.origin.x = 12.0; r.size.width = cw - 24.0; }
+            tf.frame = r;
+            if (!active && wamIsLandscape()) [tf layoutIfNeeded];
+
+            // UISearchTextField centres its {🔍 + placeholder} within the field via private layout that
+            // ignores frame / rect-method / positionAdjustment / placeholder-width overrides, and silently
+            // reinstalls its own magnifier as leftView (so recolouring it never sticks). So in the landscape
+            // split we permanently hide the real glyph + placeholder and own the magnifier ourselves — drawn
+            // as an overlay that stays up in EVERY state (rest, active-empty, active-typing), only hiding the
+            // "Search" placeholder label once there's real text. Portrait restores the stock field.
+            NSString *origPH = objc_getAssociatedObject(tf, &kWAMSearchOrigPlaceholderKey);
+            if (!origPH) {
+                origPH = tf.placeholder.length ? tf.placeholder : @"Search";
+                objc_setAssociatedObject(tf, &kWAMSearchOrigPlaceholderKey, origPH, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            UIView *ov = [fxv.contentView viewWithTag:kWAMSearchGlyphOverlayTag];
+            if (wamIsLandscape()) {
+                BOOL pg = gWAMForceGlobalColorResolve; gWAMForceGlobalColorResolve = YES;
+                BOOL tActive = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark") ||
+                               isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark");
+                UIColor *glyphColor = tActive ? getAdvancedSearchFieldColor() : [UIColor placeholderTextColor];
+                gWAMForceGlobalColorResolve = pg;
+                tf.leftViewMode = UITextFieldViewModeNever;   // never show the real (uncontrollable-colour) magnifier
+                if (tf.placeholder.length) tf.placeholder = @"";
+                if (!ov) {
+                    ov = [[UIView alloc] init];
+                    ov.tag = kWAMSearchGlyphOverlayTag;
+                    ov.userInteractionEnabled = NO;
+                    UIImageView *mg = [[UIImageView alloc] init]; mg.tag = 1;
+                    mg.contentMode = UIViewContentModeScaleAspectFit;
+                    UILabel *lb = [[UILabel alloc] init]; lb.tag = 2;
+                    [ov addSubview:mg]; [ov addSubview:lb];
+                    [fxv.contentView addSubview:ov];
+                }
+                [fxv.contentView bringSubviewToFront:ov];
+                ov.hidden = NO;
+                UIImageView *mg = (UIImageView *)[ov viewWithTag:1];
+                UILabel *lb = (UILabel *)[ov viewWithTag:2];
+                UIFont *font = tf.font ?: [UIFont systemFontOfSize:17.0];
+                UIImageSymbolConfiguration *cfg =
+                    [UIImageSymbolConfiguration configurationWithPointSize:font.pointSize weight:UIImageSymbolWeightRegular];
+                // Bake the colour into the pixels (AlwaysOriginal) rather than relying on mg.tintColor —
+                // the view-tree dump proved OUR overlay is the only visible icon while typing (the real one
+                // is genuinely suppressed), yet it still read the wrong colour: some other tint-related hook
+                // in the codebase must be touching mg.tintColor afterward. Baked pixels are immune to that.
+                mg.image = [[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:cfg]
+                               imageWithTintColor:glyphColor renderingMode:UIImageRenderingModeAlwaysOriginal];
+                [mg sizeToFit];
+                lb.text = origPH; lb.textColor = glyphColor; lb.font = font; [lb sizeToFit];
+                ov.frame = fxv.contentView.bounds;
+                // Align the overlay glyph/label with the dictation mic, which sits at pill-centre ≈ +0.5.
+                CGFloat oy = 0.5;
+                CGFloat mgW = mg.bounds.size.width, mgH = mg.bounds.size.height, lx = 14.0;
+                mg.frame = CGRectMake(lx, (ch - mgH) / 2.0 + oy, mgW, mgH);
+                CGFloat lbx = lx + mgW + 6.0;
+                lb.frame = CGRectMake(lbx, (ch - lb.bounds.size.height) / 2.0 + oy,
+                                      MIN(lb.bounds.size.width, cw - lbx - 40.0), lb.bounds.size.height);
+                // Once real text is entered, hide only the "Search" placeholder label — the magnifier icon
+                // (our colour-locked one, not the system's) stays up the whole time.
+                lb.hidden = tf.text.length > 0;
+            } else {
+                tf.leftViewMode = UITextFieldViewModeAlways;
+                if (tf.placeholder.length == 0 && origPH) tf.placeholder = origPH;
+                if (ov) ov.hidden = YES;
+            }
+        }
+        // Center the Cancel button too so it's inline with the field (it's a button beside the field,
+        // not inside it — skip the field's own clear button).
+        if (active) {
+            NSMutableArray *q = [NSMutableArray arrayWithArray:sb.subviews];
+            while (q.count) {
+                UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                if (tf && [v isDescendantOfView:tf]) continue;
+                if ([v isKindOfClass:[UIButton class]]) {
+                    CGRect br = v.frame;
+                    br.origin.y = (v.superview.bounds.size.height - br.size.height) / 2.0;
+                    v.frame = br;
+                } else {
+                    [q addObjectsFromArray:v.subviews];
+                }
+            }
+        }
+    }
+
+    // Colorless frosted blur + the shared user tint, matching the nav button platters.
+    Class subCls = NSClassFromString(@"_UIVisualEffectSubview");
+    for (UIView *sub in fxv.subviews)
+        if ([sub isKindOfClass:subCls]) sub.backgroundColor = [UIColor clearColor];
+    UIView *tint = nil;
+    for (UIView *s in fxv.contentView.subviews)
+        if (s.tag == kWAMBottomSearchTintTag) { tint = s; break; }
+    UIColor *tintColor = getNavPlatterColor(YES);   // conversation list — global color
+    if (tintColor) {
+        if (!tint) {
+            tint = [[UIView alloc] init];
+            tint.tag = kWAMBottomSearchTintTag;
+            tint.userInteractionEnabled = NO;
+            [fxv.contentView insertSubview:tint atIndex:0];
+        }
+        tint.frame = fxv.contentView.bounds;
+        tint.backgroundColor = tintColor;
+    } else if (tint) {
+        [tint removeFromSuperview];
+    }
+    // sb is now a sibling of container in `host` (not nested in fxv.contentView) — bring container to front
+    // first (above the list content, above glass), then sb LAST so it ends up the true topmost, above both.
+    [host bringSubviewToFront:container];
+    [host bringSubviewToFront:sb];
+}
+
+%new
+-(void)wamKeyboardChanged:(NSNotification *)note {
+    if (![self isViewLoaded] || !self.view.window) return;
+    if (!objc_getAssociatedObject(self, &kWAMBottomSearchCtrlKey)) return;   // only when relocated
+
+    CGRect kbEnd = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    gWAMSearchKbVisible = kbEnd.origin.y < UIScreen.mainScreen.bounds.size.height - 1.0;
+    gWAMSearchKbFrameWin = kbEnd;
+
+    double dur = [note.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    NSInteger curve = [note.userInfo[UIKeyboardAnimationCurveUserInfoKey] integerValue];
+    [UIView animateWithDuration:MAX(dur, 0.15) delay:0.0
+                        options:(UIViewAnimationOptions)(curve << 16)
+                     animations:^{ [self wamSetupBottomSearch]; } completion:nil];
+
+    // The controller's self-presentation may not be in the window yet when the keyboard animates in;
+    // re-run once it settles so the platter re-homes on top of the results.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [self wamSetupBottomSearch]; });
+    // Catch the search bar again after the controller's dismissal animation completes.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [self wamSetupBottomSearch]; });
 }
 
 %new
@@ -4201,6 +5145,21 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
     }
 
     [self applyCustomColorsToCKLabelsInView:self.view];
+
+    [self wamSetupBottomSearch];
+
+    // With the blur platters on: breathing room below the nav bar so the pinned cells don't crowd the
+    // (down-nudged) pills, and room at the bottom so content clears the floating search platter. Guarded
+    // so setting it doesn't re-trigger layout endlessly.
+    BOOL on = isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal();
+    CGFloat wantTop = on ? 14.0 : 0.0;
+    CGFloat wantBottom = on ? 66.0 : 0.0;
+    UIEdgeInsets ins = self.additionalSafeAreaInsets;
+    if (fabs(ins.top - wantTop) > 0.5 || fabs(ins.bottom - wantBottom) > 0.5) {
+        ins.top = wantTop;
+        ins.bottom = wantBottom;
+        self.additionalSafeAreaInsets = ins;
+    }
 }
 
 %new
@@ -4294,6 +5253,221 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
 
 %end
 
+#if WAM_SCREENSHOT_MODE
+// =====================================================================
+//  SCREENSHOT MODE — marketing screenshots only, never ships enabled.
+//  See WAM_SCREENSHOT_MODE near the top of this file.
+// =====================================================================
+
+static NSArray<NSString *> *wamScreenshotFakeNames(void) {
+    // First names only, and genuinely short (<=4 letters) — confirmed via device diagnostics the pinned-
+    // conversation name label is only ~29pt wide, which clips even a plain 4-6 letter name like "Isabella"
+    // or "Amelia". Kept uniformly short so the same pool works in both the roomy list row and the tight
+    // pinned slot without needing separate pools per context.
+    static NSArray<NSString *> *names;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        names = @[@"Emma", @"Liam", @"Ava", @"Noah", @"Mia", @"Ethan", @"Zoe", @"Jack",
+                  @"Kai", @"Ella", @"Sam", @"Ivy", @"Owen", @"Leo", @"Amy", @"Ryan",
+                  @"Eve", @"Ben", @"Lily", @"Max", @"Jo", @"Finn", @"Tara", @"Cole"];
+    });
+    return names;
+}
+
+static NSArray<NSString *> *wamScreenshotFakePreviews(void) {
+    // Mixed lengths on purpose — a conv list where every preview is exactly one short line reads as
+    // obviously staged. Short and long entries are interleaved through the same pool (selection is a hash
+    // over the whole array) rather than split into two pools, so it comes out roughly half and half without
+    // needing separate short/long logic.
+    static NSArray<NSString *> *previews;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        previews = @[
+            @"Sounds good, see you then!", @"Haha that's amazing 😂", @"Can you send that over?",
+            @"On my way, be there in 10", @"Thanks so much for this!",
+            @"I read through everything you sent over and it all looks good to me. Just a couple small tweaks and we should be set.",
+            @"Yeah I'm free this weekend", @"That looks great!",
+            @"Hey, I just got back from the store and grabbed everything on the list. Let me know if you need anything else before tonight.",
+            @"Just landed, calling you soon", @"Happy birthday! 🎉",
+            @"That meeting ran way longer than expected but I think we got everything sorted out. I'll send over the notes in a bit.",
+            @"I'll bring the snacks", @"Perfect, talk soon",
+            @"I was thinking about that trip we talked about and I think October could actually work great for both of us.",
+            @"Love that idea",
+            @"Just wanted to check in and see how everything's going on your end. It's been a minute since we caught up properly.",
+            @"Got it, thank you!",
+            @"The new place looks amazing so far, way bigger than I expected honestly. You'll have to come see it once we're settled in.",
+            @"Can't wait to see you",
+            @"I finally finished that project I've been putting off for weeks. Feels so good to have it off my plate now.",
+            @"Sent you the details",
+            @"We should definitely plan something for the weekend, it's been way too long since we all got together.",
+            @"Running a few minutes late",
+            @"Thanks again for helping me move last weekend, I really appreciate it. Let me know if you ever need a hand with anything.",
+            @"No worries at all",
+            @"The flight got delayed a couple hours but I should still land before dinner. I'll text you when I'm on the ground.",
+            @"Did you see the game last night?",
+            @"I've been meaning to ask, are you still free to help out with the thing on Saturday? No worries at all if plans changed."
+        ];
+    });
+    return previews;
+}
+
+// Each entry is a two-color gradient pair rather than a flat fill — a wider hue spread than before, and the
+// gradient itself reads as more "designed"/less repetitive across a screenshot full of avatars.
+static NSArray<NSArray<UIColor *> *> *wamScreenshotAvatarGradients(void) {
+    static NSArray<NSArray<UIColor *> *> *gradients;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gradients = @[
+            @[[UIColor colorWithRed:0.25 green:0.55 blue:0.95 alpha:1.0], [UIColor colorWithRed:0.45 green:0.78 blue:1.00 alpha:1.0]],   // blue
+            @[[UIColor colorWithRed:0.98 green:0.45 blue:0.22 alpha:1.0], [UIColor colorWithRed:1.00 green:0.72 blue:0.32 alpha:1.0]],   // orange
+            @[[UIColor colorWithRed:0.30 green:0.75 blue:0.42 alpha:1.0], [UIColor colorWithRed:0.58 green:0.90 blue:0.55 alpha:1.0]],   // green
+            @[[UIColor colorWithRed:0.88 green:0.22 blue:0.52 alpha:1.0], [UIColor colorWithRed:1.00 green:0.52 blue:0.70 alpha:1.0]],   // pink
+            @[[UIColor colorWithRed:0.55 green:0.32 blue:0.92 alpha:1.0], [UIColor colorWithRed:0.78 green:0.60 blue:1.00 alpha:1.0]],   // purple
+            @[[UIColor colorWithRed:0.95 green:0.72 blue:0.10 alpha:1.0], [UIColor colorWithRed:1.00 green:0.90 blue:0.40 alpha:1.0]],   // yellow/gold
+            @[[UIColor colorWithRed:0.15 green:0.68 blue:0.72 alpha:1.0], [UIColor colorWithRed:0.42 green:0.90 blue:0.90 alpha:1.0]],   // teal
+            @[[UIColor colorWithRed:0.90 green:0.18 blue:0.20 alpha:1.0], [UIColor colorWithRed:1.00 green:0.45 blue:0.42 alpha:1.0]],   // red
+            @[[UIColor colorWithRed:0.28 green:0.28 blue:0.75 alpha:1.0], [UIColor colorWithRed:0.55 green:0.55 blue:0.98 alpha:1.0]],   // indigo
+            @[[UIColor colorWithRed:0.62 green:0.42 blue:0.26 alpha:1.0], [UIColor colorWithRed:0.85 green:0.65 blue:0.42 alpha:1.0]],   // brown/tan
+            @[[UIColor colorWithRed:0.42 green:0.65 blue:0.22 alpha:1.0], [UIColor colorWithRed:0.68 green:0.88 blue:0.32 alpha:1.0]],   // olive/lime
+            @[[UIColor colorWithRed:0.28 green:0.40 blue:0.58 alpha:1.0], [UIColor colorWithRed:0.52 green:0.68 blue:0.85 alpha:1.0]],   // slate blue
+            @[[UIColor colorWithRed:0.75 green:0.20 blue:0.75 alpha:1.0], [UIColor colorWithRed:0.95 green:0.50 blue:0.95 alpha:1.0]],   // magenta
+            @[[UIColor colorWithRed:0.20 green:0.55 blue:0.35 alpha:1.0], [UIColor colorWithRed:0.35 green:0.78 blue:0.68 alpha:1.0]],   // forest→teal
+        ];
+    });
+    return gradients;
+}
+
+// Deterministic per-seed pick (not random) — the same real name always maps to the same fake one, so
+// scrolling a cell off/onscreen or a relayout never causes it to flicker between different fakes. Also
+// collision-avoiding: a plain hash-mod-count pick let two DIFFERENT real conversations land on the same
+// fake name whenever they happened to hash to the same bucket, which reads as obviously fake in a
+// screenshot with more than one row visible. This instead remembers every real-name → fake-name assignment
+// made so far and, on a new real name, walks the pool starting from its hash bucket until it finds one no
+// other real name currently holds — so every fake name on screen at once is unique as long as there are at
+// least as many pool entries as visible conversations.
+static NSString *wamScreenshotFakeNameFor(NSString *seed) {
+    static NSMutableDictionary<NSString *, NSString *> *seedToFake;
+    static NSMutableSet<NSString *> *usedFakes;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        seedToFake = [NSMutableDictionary new];
+        usedFakes = [NSMutableSet new];
+    });
+    NSString *existing = seedToFake[seed];
+    if (existing) return existing;
+    NSArray<NSString *> *names = wamScreenshotFakeNames();
+    NSUInteger start = (NSUInteger)(labs((long)seed.hash) % (long)names.count);
+    NSString *chosen = nil;
+    for (NSUInteger i = 0; i < names.count; i++) {
+        NSString *candidate = names[(start + i) % names.count];
+        if (![usedFakes containsObject:candidate]) { chosen = candidate; break; }
+    }
+    if (!chosen) chosen = names[start];   // pool exhausted (more real conversations than fake names) — repeat
+    seedToFake[seed] = chosen;
+    [usedFakes addObject:chosen];
+    return chosen;
+}
+
+static NSString *wamScreenshotFakePreviewFor(NSString *seed) {
+    NSArray<NSString *> *previews = wamScreenshotFakePreviews();
+    return previews[(NSUInteger)(labs((long)seed.hash) % (long)previews.count)];
+}
+
+static NSArray<UIColor *> *wamScreenshotAvatarGradientFor(NSString *seed) {
+    NSArray<NSArray<UIColor *> *> *gradients = wamScreenshotAvatarGradients();
+    return gradients[(NSUInteger)(labs((long)seed.hash) % (long)gradients.count)];
+}
+
+// Replaces label.text with a deterministic fake derived from whatever's CURRENTLY there — but only when
+// that's genuinely new real data from UIKit's own cell configuration, not our own fake text sitting
+// unchanged from the last pass (recognized via the associated "last fake we set" marker) — otherwise
+// re-hashing our own fake output on every layout pass would make the name drift across relayouts instead of
+// staying fixed per row.
+static void wamScreenshotLabelFakeText(UILabel *label, BOOL isName) {
+    static char kWAMSSFakeKey;
+    NSString *current = label.text;
+    if (!current.length) return;
+    NSString *lastFake = objc_getAssociatedObject(label, &kWAMSSFakeKey);
+    if ([current isEqualToString:lastFake]) return;
+    NSString *fake = isName ? wamScreenshotFakeNameFor(current) : wamScreenshotFakePreviewFor(current);
+    objc_setAssociatedObject(label, &kWAMSSFakeKey, fake, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    label.text = fake;
+}
+
+// Confirmed via device diagnostics: the real class is CKAvatarView, not CNVisualIdentityAvatarContainerView
+// — and in the pinned-conversation layout, the actual photo isn't even nested inside it, it's a SEPARATE
+// sibling UIImageView positioned over the same spot. Covering CKAvatarView's own bounds from a subview
+// added inside it would sit BEHIND that sibling photo and never be visible. Instead, add the cover as a
+// sibling of CKAvatarView in ITS OWN parent, sized/positioned to CKAvatarView's frame, and push it to the
+// very front of that parent — which sits on top of CKAvatarView AND any later sibling (the real photo)
+// regardless of which structural style this particular row uses.
+static void wamScreenshotRedactAvatarAt(UIView *parent, CGRect frameInParent, NSString *fakeNameSeed) {
+    static const NSInteger kWAMSSAvatarTag = 4491;
+    static char kWAMSSGradientLayerKey;
+    UIView *cover = [parent viewWithTag:kWAMSSAvatarTag];
+    if (!cover || cover.superview != parent) {
+        cover = [[UIView alloc] init];
+        cover.tag = kWAMSSAvatarTag;
+        cover.userInteractionEnabled = NO;
+        cover.clipsToBounds = YES;
+        CAGradientLayer *gradientLayer = [CAGradientLayer layer];
+        gradientLayer.startPoint = CGPointMake(0.15, 0.0);
+        gradientLayer.endPoint = CGPointMake(0.85, 1.0);
+        [cover.layer addSublayer:gradientLayer];
+        objc_setAssociatedObject(cover, &kWAMSSGradientLayerKey, gradientLayer, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UILabel *initial = [[UILabel alloc] init];
+        initial.tag = kWAMScreenshotInitialLabelTag;
+        initial.textAlignment = NSTextAlignmentCenter;
+        initial.textColor = [UIColor whiteColor];
+        [cover addSubview:initial];
+        [parent addSubview:cover];
+    }
+    cover.frame = frameInParent;
+    cover.layer.cornerRadius = cover.bounds.size.width / 2.0;
+    CAGradientLayer *gradientLayer = objc_getAssociatedObject(cover, &kWAMSSGradientLayerKey);
+    gradientLayer.frame = cover.bounds;
+    NSArray<UIColor *> *pair = wamScreenshotAvatarGradientFor(fakeNameSeed);
+    gradientLayer.colors = @[(id)pair.firstObject.CGColor, (id)pair.lastObject.CGColor];
+    UILabel *initial = (UILabel *)[cover viewWithTag:kWAMScreenshotInitialLabelTag];
+    initial.frame = cover.bounds;
+    initial.font = [UIFont systemFontOfSize:MAX(12.0, cover.bounds.size.height * 0.4) weight:UIFontWeightSemibold];
+    initial.textColor = [UIColor whiteColor];
+    initial.text = fakeNameSeed.length ? [[fakeNameSeed substringToIndex:1] uppercaseString] : @"?";
+    [parent bringSubviewToFront:cover];
+}
+
+// Walks a conv-list row's (or pinned bubble's) view tree redacting name/preview labels and avatar photos.
+// Same label taxonomy the rest of the file already uses (see applyCustomTextColors): CKLabel (not
+// CKDateLabel) = name, CKDateLabel/UIDateLabel = timestamp (left alone — not asked for), plain UILabel =
+// message preview. BFS rather than recursive-with-a-running-seed so avatar redaction (which needs the row's
+// fake name) doesn't depend on the avatar view happening to be visited after the name label — it always
+// runs once at the end, after the whole tree's been walked.
+static void wamScreenshotApplyToCell(UIView *root) {
+    NSString *fakeName = nil;
+    UIView *avatarView = nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    while (queue.count) {
+        UIView *v = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if ([v isKindOfClass:%c(CKLabel)] && ![v isKindOfClass:%c(CKDateLabel)]) {
+            wamScreenshotLabelFakeText((UILabel *)v, YES);
+            if (!fakeName.length) fakeName = ((UILabel *)v).text;
+        } else if ([v isKindOfClass:%c(CKDateLabel)] || [v isKindOfClass:%c(UIDateLabel)]) {
+            // timestamps left as-is
+        } else if ([v isKindOfClass:[UILabel class]]) {
+            wamScreenshotLabelFakeText((UILabel *)v, NO);
+        } else if ([v isKindOfClass:%c(CKAvatarView)]) {
+            avatarView = v;
+            continue;   // don't descend into it — the cover goes over it as a sibling, see above
+        }
+        for (UIView *sub in v.subviews) [queue addObject:sub];
+    }
+    if (avatarView && avatarView.superview) {
+        wamScreenshotRedactAvatarAt(avatarView.superview, avatarView.frame, fakeName.length ? fakeName : @"x");
+    }
+}
+#endif
+
 %hook CKConversationListCollectionViewConversationCell
 
 -(instancetype)initWithFrame:(CGRect)frame {
@@ -4382,6 +5556,9 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
     }
 
     applyCustomTextColors(self);
+#if WAM_SCREENSHOT_MODE
+    wamScreenshotApplyToCell(self.contentView);
+#endif
 }
 
 %end
@@ -4389,6 +5566,11 @@ static void wamApplyBackdrop(UIView *v, BOOL wantClear, BOOL opaqueFallback) {
 %hook UILabel
 
 - (void)setTextColor:(UIColor *)color {
+    // Screenshot mode's fake-avatar initial letter is a plain UILabel sitting inside a conv-list cell —
+    // the per-context color logic below (correctly) treats every plain UILabel there as a message-preview
+    // label and repaints it, which was silently overriding the white we set on it. Bypass unconditionally
+    // for this one tag regardless of any other pref state.
+    if (self.tag == kWAMScreenshotInitialLabelTag) { %orig; return; }
     if (!isTweakEnabled() || !isCustomTextColorsEnabled()) {
         %orig;
         return;
@@ -5173,7 +6355,54 @@ static BOOL wamBarIsInMediaViewer(UIView *bar) {
         if (isChatName) target = chatNameColor;
         else if (isConvListTitle) target = convListTitleColor;
         else target = tintColor;
-        if (isConvListTitle) label.text = conversationListTitle;
+        if (isConvListTitle) {
+            label.text = conversationListTitle;
+            // With the blur platters on, the Edit/Compose content is nudged down; drop the title the
+            // same amount so it sits centred on the platters' height.
+            BOOL platters = isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal();
+            CGFloat ty = platters ? wamNavButtonDropY(YES) : 0.0;
+            CGFloat tx = 0.0;
+            if (platters && wamIsLandscape()) {
+                // In the narrow split column the stock title is left-aligned and rides over the Edit button.
+                // Re-centre it in the gap between the Edit and Compose PLATTERS (tags 4400 / 4413) — the
+                // platters extend past the button bounds, so centring on the buttons still overlaps them.
+                UIView *nav = self;
+                while (nav && ![nav isKindOfClass:[UINavigationBar class]]) nav = nav.superview;
+                CGFloat editRight = -CGFLOAT_MAX, composeLeft = CGFLOAT_MAX;
+                if (nav) {
+                    NSMutableArray *q = [NSMutableArray arrayWithArray:nav.subviews];
+                    while (q.count) {
+                        UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                        if ((v.tag == 4400 || v.tag == 4413) && v.bounds.size.width > 0) {
+                            CGRect f = [v convertRect:v.bounds toView:self];
+                            // Edit platter is the left one, Compose the right — classify by centre.
+                            if (CGRectGetMidX(f) < 0.0) editRight = MAX(editRight, CGRectGetMaxX(f));
+                            else composeLeft = MIN(composeLeft, CGRectGetMinX(f));
+                        }
+                        [q addObjectsFromArray:v.subviews];
+                    }
+                }
+                if (editRight > -CGFLOAT_MAX && composeLeft < CGFLOAT_MAX && composeLeft > editRight) {
+                    CGFloat gapCenter = (editRight + composeLeft) / 2.0;
+                    // The title nearly fills the gap, so even centred it hugs the platters. Constrain its
+                    // width to leave a clear margin each side (truncates a touch more), keeping its centre.
+                    CGFloat maxW = (composeLeft - editRight) - 28.0;
+                    if (maxW > 40.0 && label.bounds.size.width > maxW) {
+                        CGFloat cx = CGRectGetMidX(label.frame);
+                        CGRect lf = label.frame;
+                        lf.size.width = maxW;
+                        lf.origin.x = cx - maxW / 2.0;
+                        label.frame = lf;
+                    }
+                    CGPoint lc = [label.superview convertPoint:label.center toView:self];
+                    tx = gapCenter - lc.x;
+                    ((UIView *)self).clipsToBounds = NO;
+                    label.superview.clipsToBounds = NO;
+                }
+            }
+            label.transform = platters ? CGAffineTransformMakeTranslation(tx, ty)
+                                        : CGAffineTransformIdentity;
+        }
         if (target) {
             if (!objc_getAssociatedObject(label, &kWAMOrigTitleColorKey)) {
                 objc_setAssociatedObject(label, &kWAMOrigTitleColorKey, label.textColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -5369,6 +6598,9 @@ static BOOL wamBarIsInMediaViewer(UIView *bar) {
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+#if WAM_SCREENSHOT_MODE
+    wamScreenshotApplyToCell((UIView *)self);
+#endif
     [self applyPinnedGlow];
 }
 
@@ -5531,6 +6763,91 @@ static NSString *wamContactNameFromTranscript(id vc) {
     return nil;
 }
 
+static UIView *wamFirstDescendantOfClassNamed(UIView *root, NSString *clsName) {
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    while (queue.count) {
+        UIView *v = queue.firstObject; [queue removeObjectAtIndex:0];
+        if ([NSStringFromClass([v class]) isEqualToString:clsName]) return v;
+        [queue addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+static void wamCollectDescendantsOfClassNamed(UIView *root, NSString *clsName, NSMutableArray<UIView *> *out) {
+    if ([NSStringFromClass([root class]) isEqualToString:clsName]) { [out addObject:root]; return; }
+    for (UIView *s in root.subviews) wamCollectDescendantsOfClassNamed(s, clsName, out);
+}
+
+static UILabel *wamFirstLabelDescendant(UIView *root) {
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    while (queue.count) {
+        UIView *v = queue.firstObject; [queue removeObjectAtIndex:0];
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) return (UILabel *)v;
+        [queue addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+// In MessagesViewService (the sharesheet compose host) there's no CKMessagesController to resolve the active
+// conversation from (see getCurrentContactName), and the transcript's own KVC paths + biggest-label fallback
+// (wamContactNameFromTranscript) grab the wrong text there — a "Read Yesterday" receipt label, not the
+// recipient — and there's no nav bar title to fall back on either (the sharesheet compose screen has none).
+// The real name lives in the recipient token bar instead: CKComposeRecipientView -> _CNAtomTextView ->
+// (one) CNComposeRecipientAtom per chosen recipient -> a UIView -> the name UILabel. Walked by class name via
+// plain view-hierarchy traversal (no ivar reflection) so it can't repeat the earlier crash; each search stage
+// tolerates Apple inserting extra wrapper views in between, since it only requires the sequence to appear
+// somewhere below, not as direct children.
+static NSString *wamComposeRecipientBarName(UIView *recipientView) {
+    UIView *atomTextView = wamFirstDescendantOfClassNamed(recipientView, @"_CNAtomTextView");
+    if (!atomTextView) return nil;
+    NSMutableArray<UIView *> *atoms = [NSMutableArray array];
+    wamCollectDescendantsOfClassNamed(atomTextView, @"CNComposeRecipientAtom", atoms);
+    if (!atoms.count) return nil;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (UIView *atom in atoms) {
+        UILabel *l = wamFirstLabelDescendant(atom);
+        if (l.text.length) [names addObject:l.text];
+    }
+    return names.count ? [names componentsJoinedByString:@", "] : nil;
+}
+
+// Confirmed via device diagnostics: the class chain resolves correctly the moment a CNComposeRecipientAtom
+// (one per chosen recipient) exists, but CKComposeRecipientView's own layoutSubviews doesn't reliably get
+// called again the instant a chip is inserted (it's a rich-text/attachment system — the outer view isn't
+// guaranteed to re-layout on its own), so resolution lagged until some unrelated layout pass happened to
+// fire. Called from both CKComposeRecipientView AND CNComposeRecipientAtom itself (the atom is what's
+// actually created the moment a recipient is picked) so it resolves immediately either way.
+static void wamUpdateComposeRecipientName(UIView *anyDescendant) {
+    if (!wamIsNotificationExtension()) return;
+    UIView *recipientView = anyDescendant;
+    while (recipientView && ![NSStringFromClass([recipientView class]) isEqualToString:@"CKComposeRecipientView"])
+        recipientView = recipientView.superview;
+    if (!recipientView) return;
+    NSString *nm = wamComposeRecipientBarName(recipientView);
+    if (nm.length) {
+        if ([gWAMNotifContactName isEqualToString:nm]) return;
+        gWAMChatIsActiveSurface = YES;
+        gWAMNotifContactName = [nm copy];
+        // A lot of theming (nav title color, status/read-receipt cells, reaction glyphs, etc.) reads
+        // gWAMCurrentContactName directly rather than going through getCurrentContactName() — set it in
+        // lockstep, matching every other capture site in the file, or those stay on global colors forever.
+        gWAMCurrentContactName = [nm copy];
+        gWAMCurrentContactDisplayName = [nm copy];
+        gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
+    } else {
+        if (!gWAMNotifContactName.length) return;
+        // Recipient chip deleted — the field is empty again, revert to global styling.
+        gWAMNotifContactName = nil;
+        gWAMCurrentContactName = nil;
+        gWAMCurrentContactDisplayName = nil;
+    }
+    // refreshPrefs() alone only reloads the plist — it doesn't notify anything. wamTriggerFullChatRefresh()
+    // is what actually posts kPrefsChangedNotification (its no-CKMessagesController fallback, which is
+    // exactly this process's situation), which is what every "handleXPrefsChanged" observer in this file is
+    // listening for to re-theme itself right now instead of waiting for some unrelated layout pass.
+    wamTriggerFullChatRefresh();
+}
+
 static void wamAdoptNotificationContact(id transcriptVC) {
     if (!wamIsNotificationExtension()) return;
     gWAMChatIsActiveSurface = YES;
@@ -5558,7 +6875,28 @@ static void wamAdoptNotificationContact(id transcriptVC) {
 
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
+    gWAMChatLeaving = NO;
     wamAdoptNotificationContact(self);
+}
+
+// Fade the name-platter shadow out alongside the leave transition (it lives in the stable layout
+// container, so it can't slide with the chat on its own). Restore it if the swipe is cancelled.
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    gWAMChatLeaving = YES;
+    UIView *shadow = gWAMNameShadow;
+    id<UIViewControllerTransitionCoordinator> tc = self.transitionCoordinator;
+    if (shadow && tc) {
+        // Fade out alongside the transition; on a cancelled swipe restore it. Never remove — it's reused
+        // and reset to alpha 1 when a chat's name lays out again, which avoids removal races on re-entry.
+        [tc animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            shadow.alpha = 0.0;
+        } completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+            if (ctx.isCancelled) shadow.alpha = 1.0;
+        }];
+    } else if (shadow) {
+        shadow.alpha = 0.0;
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -5831,6 +7169,76 @@ static void wamRelayoutGradients(UIView *root) {
 
 }
 
+// Comprehensive re-theme of this chat against its current conversation — used when a per-contact change
+// is applied from the settings sheet while the chat is still on screen. Pins this chat as the active
+// per-contact surface so the background, nav-bar platters, name platter and colors all resolve to the
+// (possibly just-changed) per-contact values, then forces a layout pass.
+%new
+-(void)wamRethemeCurrentChat {
+    if (!isTweakEnabled()) return;
+    reloadPrefs();
+    invalidateConvImageCache();
+    gWAMChatBgGen++;   // force the chat bg past the mtime-based image cache and state-skip (see gWAMChatBgGen)
+
+    NSString *name = nil;
+    @try {
+        id conv = [self valueForKey:@"_currentConversation"];
+        if (conv) {
+            id chat = nil;
+            @try { chat = [conv valueForKey:@"_chat"]; } @catch (__unused NSException *e) {}
+            if ([chat respondsToSelector:@selector(displayName)]) {
+                NSString *dn = [chat performSelector:@selector(displayName)];
+                if ([dn isKindOfClass:[NSString class]] && dn.length) name = dn;
+            }
+            if (!name.length) {
+                static const char *nameIvars[] = {"_name", "_displayName", "_groupName", NULL};
+                for (int i = 0; nameIvars[i]; i++) {
+                    Ivar v = class_getInstanceVariable([conv class], nameIvars[i]);
+                    if (!v) continue;
+                    id val = object_getIvar(conv, v);
+                    if ([val isKindOfClass:[NSString class]] && [(NSString *)val length]) { name = val; break; }
+                }
+            }
+        }
+    } @catch (__unused NSException *e) {}
+    if (!name.length) name = gWAMActiveChatName;
+
+    // Pin the contact context for the synchronous refresh + notification below.
+    NSString *prevTrigger = gWAMTriggerNameOverride;
+    NSString *prevNotif = gWAMNotifContactName;
+    if (name.length) {
+        gWAMCurrentContactName = [name copy];
+        gWAMCurrentContactDisplayName = [name copy];
+        gWAMActiveChatName = [name copy];
+        gWAMCacheSetAt = [NSDate timeIntervalSinceReferenceDate];
+        gWAMTriggerNameOverride = name;
+        gWAMNotifContactName = name;
+    }
+    gWAMChatIsActiveSurface = YES;
+
+    // A preset applied from the details sheet leaves the chat off-screen behind it. Swapping .image on
+    // the existing (off-screen) bg view doesn't re-display when the chat returns — only a fresh recreate
+    // does (which is why leaving and re-entering works). So drop the current bg view + its cached state:
+    // if the chat is visible now, rebuild immediately; otherwise viewWillAppear rebuilds it fresh on return.
+    for (UIView *sub in [self.view.subviews copy]) if (sub.tag == 4321) [sub removeFromSuperview];
+    objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    if (self.view.window) [self updateChatBackground];
+    [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+
+    // The cached identity above keeps async layout resolving to this contact after we unpin the
+    // notification override; force the pass so platters / name platter / colors re-read immediately.
+    NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes)
+            if ([scene isKindOfClass:[UIWindowScene class]])
+                [wins addObjectsFromArray:((UIWindowScene *)scene).windows];
+    }
+    for (UIWindow *w in wins) wamForceVisualRefresh(w);
+
+    gWAMTriggerNameOverride = prevTrigger;
+    gWAMNotifContactName = prevNotif;
+}
+
 %new
 -(void)forceRedrawCell:(UIView *)view {
     if ([view isKindOfClass:%c(CKGradientView)]) {
@@ -5866,7 +7274,6 @@ static void wamRelayoutGradients(UIView *root) {
 
 %new
 -(void)updateChatBackground {
-    static const char kBgStateKey = 0;
 
     refreshPrefs();
 
@@ -5884,10 +7291,10 @@ static void wamRelayoutGradients(UIView *root) {
         CGFloat blur = getEffectiveChatBgBlur();
         NSDictionary *attrs = desiredPath ? [[NSFileManager defaultManager] attributesOfItemAtPath:desiredPath error:nil] : nil;
         NSTimeInterval mtime = [(NSDate *)attrs[NSFileModificationDate] timeIntervalSince1970];
-        desiredState = [NSString stringWithFormat:@"img:%@|%.2f|%.0f", desiredPath ?: @"", blur, mtime];
+        desiredState = [NSString stringWithFormat:@"img:%@|%.2f|%.0f|%lu", desiredPath ?: @"", blur, mtime, (unsigned long)gWAMChatBgGen];
     }
 
-    NSString *currentState = objc_getAssociatedObject(self.view, &kBgStateKey);
+    NSString *currentState = objc_getAssociatedObject(self.view, &kWAMChatBgStateKey);
     UIView *existingBg = nil;
     for (UIView *sub in self.view.subviews) {
         if (sub.tag == 4321) { existingBg = sub; break; }
@@ -5906,7 +7313,7 @@ static void wamRelayoutGradients(UIView *root) {
         for (UIView *sub in [self.view.subviews copy]) {
             if (sub.tag == 4321) [sub removeFromSuperview];
         }
-        objc_setAssociatedObject(self.view, &kBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
         return;
     }
 
@@ -5919,7 +7326,7 @@ static void wamRelayoutGradients(UIView *root) {
         colorView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         colorView.tag = 4321;
         [self wamPlaceChatBackground:colorView];
-        objc_setAssociatedObject(self.view, &kBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
         return;
     }
 
@@ -5929,7 +7336,7 @@ static void wamRelayoutGradients(UIView *root) {
     if ([existingBg isKindOfClass:[UIImageView class]]) {
         ((UIImageView *)existingBg).image = chatBgImage;
         [self wamPlaceChatBackground:existingBg];
-        objc_setAssociatedObject(self.view, &kBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
         return;
     }
 
@@ -5944,7 +7351,7 @@ static void wamRelayoutGradients(UIView *root) {
     imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     imageView.tag = 4321;
     [self wamPlaceChatBackground:imageView];
-    objc_setAssociatedObject(self.view, &kBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, desiredState, OBJC_ASSOCIATION_COPY_NONATOMIC);
 }
 
 %new
@@ -5977,7 +7384,30 @@ static void wamRelayoutGradients(UIView *root) {
         gWAMPreviewActive = YES;
     }
     gWAMChatIsActiveSurface = YES;
+    // Drop any cached bg state so the background is rebuilt fresh on appear (covers returning from the
+    // details sheet after a per-contact preset was applied to the off-screen chat). The notification
+    // below drives handleChatPrefsChanged -> updateChatBackground with the correct contact context.
+    objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
     [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // Rotation/split-view transition: the nav-bar overlays (name platter, avatar & name shadows, call
+    // button platter) are laid out mid-transition against unsettled frames and left stale (shadows land
+    // far-left, platters mis-sized). Hide the free-floating name shadow during the animation so it doesn't
+    // streak, then force a settled re-layout once the transition finishes so everything recomputes.
+    gWAMNameShadow.alpha = 0.0;
+    objc_setAssociatedObject(self.view, &kWAMChatBgStateKey, nil, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    [coordinator animateAlongsideTransition:nil completion:^(__unused id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        wamForceLayoutAllWindows();
+        // The chat title/avatar area doesn't re-lay-out on rotation, so force its overlays to recompute
+        // against the settled post-rotation frames.
+        wamRedriveChatOverlays();
+        [self updateChatBackground];
+        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+    }];
 }
 
 - (void)setCurrentConversation:(id)conversation {
@@ -8118,12 +9548,116 @@ static const char kWAMDrawerOverlayKey = 0;
 
 %end
 
+// The iOS 17 message-bar "+" (app drawer) button is its own class: a UIImageView glyph plus its round
+// backdrop, all inside CKEntryViewPlusButton. Theme its circle to the message bar's field color and tint
+// the glyph, so it reads as part of the (customized) bar.
+%hook CKEntryViewPlusButton
+
+%new
+- (void)wamThemePlusButton {
+    static const char kBgKey = 0;         // saved stock backgroundColor
+    static const char kTemplatedKey = 0;  // glyph image already switched to template rendering
+
+    UIView *me = (UIView *)self;
+    BOOL barCustom = isInputFieldCustomizationEnabled();
+    UIColor *field = getInputFieldBackgroundColor();
+    // Opaque field hue. Must be fully opaque: any translucency lets the stock blur behind the button show
+    // through, and that blur is present before the drawer opens but gone after it closes — which made the
+    // same teal read darker (before) vs lighter (after). Opaque ⇒ backdrop can't shift it ⇒ consistent.
+    UIColor *tint = [field colorWithAlphaComponent:1.0];
+    // Glyph matches the nav buttons (back arrow etc.).
+    UIColor *glyphColor = isMessageBarButtonsEnabled()
+        ? getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", getSystemTintColor(), me)
+        : nil;
+
+    // Walk the (small) subtree. The stock puck is PlusButtonButtonView.backgroundColor, but that view is
+    // composited through its parent PlusButtonBlendedBackgroundView's BLEND — so even an opaque color
+    // rendered non-solid and shifted with the backdrop (different before/after the drawer). Put our solid
+    // fill on PlusButtonClippingView instead (above the blend, still circle-clipped: cornerRadius 17), and
+    // CLEAR PlusButtonButtonView so its gray doesn't blend on top. That escapes the blend → truly solid
+    // and identical every time. Both views collapse to {0,0} on drawer-open, so no open/close gating.
+    // Expensive work (image templating) is done once so this runs every layoutSubviews without lag.
+    NSMutableArray *q = [NSMutableArray arrayWithObject:me];
+    while (q.count) {
+        UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+        NSString *cls = NSStringFromClass([v class]);
+        if ([cls containsString:@"PlusButtonClippingView"]) {
+            if (!objc_getAssociatedObject(v, &kBgKey))
+                objc_setAssociatedObject(v, &kBgKey, v.backgroundColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (barCustom) {
+                if (![v.backgroundColor isEqual:tint]) v.backgroundColor = tint;
+            } else {
+                id orig = objc_getAssociatedObject(v, &kBgKey);
+                v.backgroundColor = (orig == [NSNull null]) ? nil : (UIColor *)orig;
+            }
+        } else if ([cls containsString:@"PlusButtonButtonView"]) {
+            if (!objc_getAssociatedObject(v, &kBgKey))
+                objc_setAssociatedObject(v, &kBgKey, v.backgroundColor ?: (id)[NSNull null], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (barCustom) {
+                if (v.backgroundColor != nil) v.backgroundColor = nil;   // clear stock gray; solid fill is on ClippingView
+            } else {
+                id orig = objc_getAssociatedObject(v, &kBgKey);
+                v.backgroundColor = (orig == [NSNull null]) ? nil : (UIColor *)orig;
+            }
+        } else if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) {
+            UIImageView *iv = (UIImageView *)v;
+            UIImage *pristine = objc_getAssociatedObject(iv, &kWAMOriginalImageKey);
+            if (!pristine) {
+                pristine = iv.image;
+                objc_setAssociatedObject(iv, &kWAMOriginalImageKey, pristine, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            if (glyphColor) {
+                if (!objc_getAssociatedObject(iv, &kTemplatedKey)) {
+                    iv.image = [pristine imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                    objc_setAssociatedObject(iv, &kTemplatedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                if (![iv.tintColor isEqual:glyphColor]) iv.tintColor = glyphColor;
+            } else if (objc_getAssociatedObject(iv, &kTemplatedKey)) {
+                iv.image = pristine;
+                objc_setAssociatedObject(iv, &kTemplatedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+        }
+        [q addObjectsFromArray:v.subviews];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    [self wamThemePlusButton];
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || !self.window) return;
+    [self wamThemePlusButton];
+    // Re-apply shortly after first appear, in case ChatKit sets its own puck color asynchronously after
+    // this initial layout (that's what made the first-load shade differ from the post-drawer one).
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelf && ((UIView *)weakSelf).window) [weakSelf wamThemePlusButton];
+    });
+}
+
+%end
+
 %hook CKDetailsTableView
 
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled()) return;
     objc_setAssociatedObject(self, "wam_headerChecked", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Pin this chat's contact while the details screen is on screen. The chat's own view leaves the
+    // window when details pushes on top, so gWAMChatIsActiveSurface flips off and per-contact resolution
+    // fails — reverting the details background to stock. This keeps it resolving to the right contact.
+    if (self.window) {
+        NSString *name = wamReadCurrentChatCanonicalName();
+        if (!name.length) name = gWAMCurrentContactName;
+        if (name.length) gWAMDetailsContactName = [name copy];
+    } else {
+        gWAMDetailsContactName = nil;
+    }
 
     [self updateDetailsBackground];
     [self applyDetailsNavTitleColor];
@@ -8322,7 +9856,7 @@ static const char kWAMDrawerOverlayKey = 0;
     vc.contactName = name;
     vc.displayName = name;
     vc.onChanged = ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+        wamTriggerFullChatRefresh();
     };
     vc.modalPresentationStyle = UIModalPresentationPageSheet;
     UIViewController *host = [(UIView *)self _viewControllerForAncestor];
@@ -8860,7 +10394,7 @@ static const char kWAMDrawerOverlayKey = 0;
     vc.contactName = name;
     vc.displayName = gWAMCurrentContactDisplayName;
     vc.onChanged = ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:kPrefsChangedNotification object:nil];
+        wamTriggerFullChatRefresh();
     };
     vc.modalPresentationStyle = UIModalPresentationPageSheet;
     UIViewController *host = [(UIView *)self _viewControllerForAncestor];
@@ -8955,6 +10489,11 @@ static const char kWAMDrawerOverlayKey = 0;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
+    if (self.bounds.size.height > 1.0) {   // the system radius (10) reads square on these tiles — round more
+        self.layer.cornerRadius = self.bounds.size.height * 0.16;
+        self.clipsToBounds = YES;
+    }
 
     BOOL hasOurBlur = NO;
     for (UIView *subview in self.subviews) {
@@ -9490,6 +11029,11 @@ static const char kWAMDrawerOverlayKey = 0;
     }
 }
 
+- (void)layoutSubviews {
+    %orig;
+    wamUpdateComposeRecipientName((UIView *)self);
+}
+
 - (void)setBackgroundColor:(UIColor *)backgroundColor {
     if (!isTweakEnabled()) { %orig; return; }
     if (wamHasCustomChatBackdrop()) { %orig([UIColor clearColor]); return; }
@@ -9501,6 +11045,37 @@ static const char kWAMDrawerOverlayKey = 0;
     if (isTweakEnabled() && !wamHasCustomChatBackdrop()) {
         self.backgroundColor = wamBaseSystemBackground(self);
     }
+}
+
+%end
+
+// The recipient chip itself — created the instant a recipient is picked, well before
+// CKComposeRecipientView's own layoutSubviews is guaranteed to run again. Hooking this directly is what
+// makes per-contact overrides apply immediately instead of only after some unrelated layout pass.
+%hook CNComposeRecipientAtom
+
+- (void)didMoveToWindow {
+    %orig;
+    wamUpdateComposeRecipientName((UIView *)self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    wamUpdateComposeRecipientName((UIView *)self);
+}
+
+// Recipient chip deleted: didMoveToWindow also fires here, but by then self is already fully detached
+// (self.superview is nil), so wamUpdateComposeRecipientName's upward walk to CKComposeRecipientView fails
+// silently and the "field is now empty, revert to global" branch never runs. willMoveToSuperview: fires
+// BEFORE detachment (self.superview is still valid), so capture the ancestor here, then recompute on the
+// next runloop tick once the removal has actually completed and this atom no longer counts.
+- (void)willMoveToSuperview:(UIView *)newSuperview {
+    %orig;
+    if (newSuperview || !wamIsNotificationExtension()) return;
+    __weak UIView *weakAncestor = ((UIView *)self).superview;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        wamUpdateComposeRecipientName(weakAncestor);
+    });
 }
 
 %end
@@ -10398,6 +11973,17 @@ static const char kWAMReplicantBlankedKey = 0;
 - (void)setTintColor:(UIColor *)color {
     if (!isTweakEnabled()) { %orig; return; }
 
+    // Our bottom-search bar (a conversation-list / global element): its Cancel button is a UINavigationButton
+    // that would otherwise re-resolve to the open chat's per-contact tint here. Force the GLOBAL tint.
+    if (wamIsOurBottomSearchDescendant((UIView *)self)) {
+        BOOL prevG = gWAMForceGlobalColorResolve;
+        gWAMForceGlobalColorResolve = YES;
+        UIColor *gt = getSystemTintColor();
+        gWAMForceGlobalColorResolve = prevG;
+        %orig(gt ?: [UIColor systemBlueColor]);
+        return;
+    }
+
     UIView *parent = self.superview;
     int levels = 0;
     while (parent && levels < 10) {
@@ -10558,16 +12144,161 @@ static const char kWAMReplicantBlankedKey = 0;
 
 %hook UISearchTextField
 
+// The search bar re-sets the field's frame to a centred natural width when it becomes active, reverting the
+// fill we apply elsewhere. Intercept every frame set for OUR bottom-search field (landscape) and force it to
+// fill the pill — this can't be reverted, since it catches the system's own set. (Same setFrame pattern the
+// FaceTime button uses.)
+- (void)setFrame:(CGRect)frame {
+    if (isTweakEnabled() && wamIsLandscape() && wamIsOurBottomSearchDescendant((UIView *)self)) {
+        UIView *sup = ((UIView *)self).superview;   // the search bar
+        if (sup && sup.bounds.size.width > 60.0) {
+            BOOL editing = [(UITextField *)self isFirstResponder];
+            CGFloat leftX = editing ? 14.0 : 12.0, rightX = sup.bounds.size.width - 12.0;
+            // While editing, the Cancel button sits to the right OF the pill — stop the field short of it so
+            // it doesn't overlap. (Blindly filling to the superview's full width, ignoring Cancel, is what
+            // made the field too wide and put the mic behind Cancel.)
+            if (editing) {
+                UIView *cancel = nil;
+                CGFloat cancelX = -CGFLOAT_MAX;
+                NSMutableArray *q = [NSMutableArray arrayWithArray:sup.subviews];
+                while (q.count) {
+                    UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+                    if ([v isDescendantOfView:(UIView *)self]) continue;
+                    if ([v isKindOfClass:[UIButton class]] && v.bounds.size.width > 0) {
+                        CGFloat x = [v convertRect:v.bounds toView:sup].origin.x;
+                        if (x > cancelX) { cancelX = x; cancel = v; }
+                    }
+                    [q addObjectsFromArray:v.subviews];
+                }
+                if (cancel) rightX = cancelX - 8.0;
+            }
+            CGFloat w = rightX - leftX;
+            if (w > 40.0) {
+                frame.origin.x = leftX;
+                frame.size.width = w;
+            }
+            frame.origin.y = (sup.bounds.size.height - frame.size.height) / 2.0;
+        }
+    }
+    %orig(frame);
+}
+
+// UISearchTextField manages its own magnifier icon and silently reinstalls it as leftView on its own layout
+// passes — reassigning leftView.tintColor/image afterward doesn't stick because the system swaps the VIEW
+// itself back. Intercept the assignment directly: once we've built our own baked-colour magnifier (myMag),
+// redirect every competing setLeftView: to it instead, so the system's own icon can never get re-installed.
+- (void)setLeftView:(UIView *)leftView {
+    if (isTweakEnabled() && wamIsOurBottomSearchDescendant((UIView *)self)) {
+        BOOL pg = gWAMForceGlobalColorResolve; gWAMForceGlobalColorResolve = YES;
+        BOOL tintActive = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark") ||
+                          isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark");
+        gWAMForceGlobalColorResolve = pg;
+        if (tintActive) {
+            UIImageView *myMag = objc_getAssociatedObject((UITextField *)self, &kWAMSearchMyMagKey);
+            if (myMag && leftView != myMag) { %orig(myMag); return; }
+        }
+    }
+    %orig(leftView);
+}
+
 - (void)didMoveToWindow {
     %orig;
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UITextFieldTextDidChangeNotification object:self];
     if (!isTweakEnabled() || !self.window) return;
     [self applySearchFieldTint];
+    // Force a layout pass on every keystroke — that's where the "Search" placeholder label's visibility gets
+    // synced to the field's text, and layoutSubviews isn't guaranteed to fire from text changes alone.
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(wamSearchTextDidChange)
+        name:UITextFieldTextDidChangeNotification object:self];
+}
+
+%new
+- (void)wamSearchTextDidChange {
+    [self setNeedsLayout];
 }
 
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
     [self applySearchFieldTint];
+    if (wamIsOurBottomSearchDescendant((UIView *)self)) {
+        // Force the magnifier (leftView) + dictation mic (rightView) to the GLOBAL search tint. applySearchFieldTint
+        // / the UINavigationButton setTintColor path can leave them on the open chat's per-contact colour in the
+        // split; this runs last, so it wins. Only when the tweak's tinting is active (else stock = gray).
+        BOOL prevG = gWAMForceGlobalColorResolve;
+        gWAMForceGlobalColorResolve = YES;
+        BOOL tintActive = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark") ||
+                          isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark");
+        UIColor *sgt = tintActive ? getAdvancedSearchFieldColor() : nil;
+        gWAMForceGlobalColorResolve = prevG;
+        UIView *rv2 = [(UITextField *)self rightView];
+        if (sgt) {
+            ((UIView *)self).tintColor = sgt;   // cursor + inherited tint = global
+            // The system re-tints the real magnifier per-contact (setting its tintColor / re-setting its image
+            // doesn't stick). So REPLACE the leftView with our own image view carrying a baked-teal magnifier —
+            // the system can't re-colour what it doesn't own. (When empty the overlay covers it; when editing
+            // this is the visible glyph.)
+            if (@available(iOS 13.0, *)) {
+                UIImageView *myMag = objc_getAssociatedObject((UITextField *)self, &kWAMSearchMyMagKey);
+                if (!myMag) {
+                    myMag = [[UIImageView alloc] init];
+                    myMag.contentMode = UIViewContentModeCenter;
+                    objc_setAssociatedObject((UITextField *)self, &kWAMSearchMyMagKey, myMag, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                UIFont *f = ((UITextField *)self).font ?: [UIFont systemFontOfSize:17.0];
+                UIImageSymbolConfiguration *cfg =
+                    [UIImageSymbolConfiguration configurationWithPointSize:f.pointSize weight:UIImageSymbolWeightRegular];
+                UIImage *baked = [[UIImage systemImageNamed:@"magnifyingglass" withConfiguration:cfg]
+                                     imageWithTintColor:sgt renderingMode:UIImageRenderingModeAlwaysOriginal];
+                if (![myMag.image isEqual:baked]) { myMag.image = baked; [myMag sizeToFit]; }
+                if (((UITextField *)self).leftView != myMag) ((UITextField *)self).leftView = myMag;
+            }
+            if (rv2 && ![rv2.tintColor isEqual:sgt]) rv2.tintColor = sgt;
+        }
+        // Dictation mic vertical position in landscape. EDITING lines up with the real content (frame centre
+        // of the field itself). At REST, derive the target directly from the SAME pill-content geometry the
+        // overlay magnifier uses (not a guessed offset) — computed fresh each pass, so it can't drift from
+        // the overlay no matter what other layout churn happens.
+        if (wamIsLandscape() && rv2 && rv2.superview) {
+            CGFloat wantY = (((UIView *)self).bounds.size.height - rv2.bounds.size.height) / 2.0;   // editing default
+            if (![(UIView *)self isFirstResponder]) {
+                UIView *container = nil;
+                for (UIView *a = ((UIView *)self).superview; a; a = a.superview)
+                    if (a.tag == kWAMBottomSearchTag) { container = a; break; }
+                UIView *fxvA = container.subviews.firstObject;
+                UIView *content = [fxvA isKindOfClass:[UIVisualEffectView class]] ? ((UIVisualEffectView *)fxvA).contentView : nil;
+                if (content) {
+                    // Same target the overlay centres on: pill content mid-height + its 0.5 optical nudge.
+                    CGFloat desiredMidY = content.bounds.size.height / 2.0 + 0.5;
+                    CGPoint pt = [content convertPoint:CGPointMake(0.0, desiredMidY) toView:(UIView *)self];
+                    wantY = pt.y - rv2.bounds.size.height / 2.0;
+                }
+            }
+            if (fabs(rv2.frame.origin.y - wantY) > 0.5) {
+                CGRect rf = rv2.frame; rf.origin.y = wantY; rv2.frame = rf;
+            }
+        }
+        // Keep the "Search" placeholder label in sync with the field's text on EVERY layout pass — this hook
+        // fires per keystroke (unlike wamSetupBottomSearch, which only runs on rotation/keyboard events), so
+        // it's the only place that reliably catches typing as it happens. The magnifier icon itself (our
+        // overlay copy) always stays up; only the placeholder text hides once there's real content.
+        if (wamIsLandscape()) {
+            UIView *container = nil;
+            for (UIView *a = ((UIView *)self).superview; a; a = a.superview)
+                if (a.tag == kWAMBottomSearchTag) { container = a; break; }
+            UIView *ov2 = container ? [container viewWithTag:kWAMSearchGlyphOverlayTag] : nil;
+            UILabel *lb2 = ov2 ? (UILabel *)[ov2 viewWithTag:2] : nil;
+            if (lb2) {
+                BOOL wantHidden = ((UITextField *)self).text.length > 0;
+                if (lb2.hidden != wantHidden) lb2.hidden = wantHidden;
+            }
+            // Becoming first responder makes the search bar re-shuffle its own subview z-order (Cancel
+            // button animation etc.), which can push our overlay BEHIND the search bar again, exposing the
+            // real (uncontrollable-colour) magnifier underneath. Re-assert front on every pass — cheap, and
+            // this is exactly the case the earlier one-shot bringSubviewToFront (setup-time only) missed.
+            if (ov2 && ov2.superview) [ov2.superview bringSubviewToFront:ov2];
+        }
+    }
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
@@ -10583,6 +12314,10 @@ static const char kWAMReplicantBlankedKey = 0;
 
 %new
 - (void)applySearchFieldTint {
+    // The search bar is a conversation-list element — never inherit the last chat's per-contact tint.
+    BOOL prevForceGlobal = gWAMForceGlobalColorResolve;
+    gWAMForceGlobalColorResolve = YES;
+
     static const char kWAMSearchFieldAppliedKey = 0;
     BOOL hasOwn = isAdvancedValueExplicitlySet(@"advancedSearchFieldColor", @"advancedSearchFieldColorDark");
     BOOL hasGlobalTint = isAdvancedValueExplicitlySet(@"systemTintColor", @"systemTintColorDark");
@@ -10602,11 +12337,12 @@ static const char kWAMReplicantBlankedKey = 0;
             }
             objc_setAssociatedObject(self, &kWAMSearchFieldAppliedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        gWAMForceGlobalColorResolve = prevForceGlobal;
         return;
     }
 
     UIColor *accent = getAdvancedSearchFieldColor();
-    if (!accent) return;
+    if (!accent) { gWAMForceGlobalColorResolve = prevForceGlobal; return; }
 
     if (!hasOwn) {
         CGFloat h, s, b, a;
@@ -10615,7 +12351,6 @@ static const char kWAMReplicantBlankedKey = 0;
             accent = [[UIColor colorWithHue:h saturation:s brightness:b alpha:1.0] colorWithAlphaComponent:0.6];
         }
     }
-
     if (self.placeholder) {
         self.attributedPlaceholder = [[NSAttributedString alloc] initWithString:self.placeholder
             attributes:@{NSForegroundColorAttributeName: accent}];
@@ -10635,6 +12370,7 @@ static const char kWAMReplicantBlankedKey = 0;
         if ([subview isKindOfClass:[UIImageView class]]) subview.tintColor = accent;
     }
     objc_setAssociatedObject(self, &kWAMSearchFieldAppliedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    gWAMForceGlobalColorResolve = prevForceGlobal;
 }
 
 %end
@@ -10844,12 +12580,14 @@ static const char kWAMHeaderLabelOrigKey = 0;
 - (void)layoutSubviews {
     %orig;
     [self wamApplyTitleColor];
+    wamApplyNamePlatter(self);
 }
 
 - (void)didMoveToWindow {
     %orig;
     if (!isTweakEnabled() || !self.window) {
         [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        gWAMNameShadow.alpha = 0.0;   // hide (not remove) — reused & reset when a chat's name lays out again
         return;
     }
     [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
@@ -10980,7 +12718,11 @@ static char kWAMPickerBlursKey;
 
 - (void)layoutSubviews {
     %orig;
-    if (!isTweakEnabled() || !isCustomBubbleColorsEnabled()) return;
+    if (!isTweakEnabled()) return;
+#if WAM_SCREENSHOT_MODE
+    wamScreenshotApplyToCell((UIView *)self);
+#endif
+    if (!isCustomBubbleColorsEnabled()) return;
     UIView *v = (UIView *)self;
     [v.layer removeAllAnimations];
     NSMutableArray *layerStack = [NSMutableArray arrayWithArray:[v.layer.sublayers copy]];
@@ -11183,6 +12925,20 @@ static char kWAMPickerBlursKey;
 %end
 
 %hook CNContactView
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled()) return;
+    // Pin this chat's contact while its details card is on screen, so per-contact theming keeps
+    // resolving after the chat's own view (and gWAMChatIsActiveSurface) drops out of the window.
+    if (self.window) {
+        NSString *name = wamReadCurrentChatCanonicalName();
+        if (!name.length) name = gWAMCurrentContactName;
+        if (name.length) gWAMDetailsContactName = [name copy];
+    } else {
+        gWAMDetailsContactName = nil;
+    }
+}
 
 - (void)didMoveToSuperview {
     %orig;
@@ -11449,6 +13205,15 @@ static char kWAMPickerBlursKey;
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+
+    // The collapsed nav-bar header shown on scroll also has a full-bleed gray background — hide it.
+    for (UIView *sub in self.subviews)
+        if ([sub class] == [UIView class] &&
+            (CGRectIsInfinite(sub.frame) || sub.frame.size.width > 100000.0)) {
+            sub.hidden = YES;
+            sub.alpha = 0.0;
+        }
+
     UIColor *titleColor = getChatContactNameColor();
     if (!titleColor) return;
     for (UIView *subview in self.subviews) {
@@ -11466,6 +13231,112 @@ static char kWAMPickerBlursKey;
             if ([subview isKindOfClass:[UILabel class]]) ((UILabel *)subview).textColor = titleColor;
         }
     }
+}
+
+%end
+
+// Secondary contact view (tap "info" in details): a big opaque UIView sits over our custom background.
+// Clear the container and hide plain-UIView backgrounds so the background shows through.
+%hook CNContactHeaderStaticDisplayView
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    self.backgroundColor = [UIColor clearColor];
+    // The gray background is the only plain UIView here; hide it regardless of frame (the parallax
+    // resizes it and un-hides it on scroll, so re-hide it on every layout).
+    for (UIView *sub in self.subviews)
+        if ([sub class] == [UIView class]) {
+            sub.hidden = YES;
+            sub.alpha = 0.0;
+        }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled()) return;
+    self.backgroundColor = [UIColor clearColor];
+    for (UIView *sub in self.subviews)
+        if ([sub class] == [UIView class]) {
+            sub.hidden = YES;
+            sub.alpha = 0.0;
+        }
+}
+
+%end
+
+// The collapsed header shown on scroll has its own full-bleed gray UIView (responds to alpha, not
+// hidden). Zero it and replace it with the nav bar's frosted blur, spanning window-top to its bottom.
+%hook CNContactHeaderCollapsedView
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    self.backgroundColor = [UIColor clearColor];
+    self.clipsToBounds = NO;
+
+    UIVisualEffectView *blur = nil;
+    for (UIView *sub in self.subviews) {
+        if (sub.tag == 4420) { blur = (UIVisualEffectView *)sub; continue; }   // our blur
+        if ([sub class] == [UIView class]) sub.alpha = 0.0;
+    }
+
+    if (!blur) {
+        blur = [[UIVisualEffectView alloc] initWithEffect:
+                [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular]];
+        blur.tag = 4420;
+        blur.userInteractionEnabled = NO;
+    }
+    [self insertSubview:blur atIndex:0];
+
+    // Span from the window top (above self) down to the header's own bottom.
+    CGFloat top = [self convertPoint:CGPointZero fromView:nil].y;   // window top in self's coords
+    blur.frame = CGRectMake(0.0, top, self.bounds.size.width, CGRectGetMaxY(self.bounds) - top + 36.0);
+
+    CAGradientLayer *mask = [blur.layer.mask isKindOfClass:[CAGradientLayer class]]
+        ? (CAGradientLayer *)blur.layer.mask : nil;
+    if (!mask) {
+        mask = [CAGradientLayer layer];
+        mask.actions = @{@"position": [NSNull null], @"bounds": [NSNull null], @"frame": [NSNull null]};
+        blur.layer.mask = mask;
+    }
+    // Full to 40%, ~55% strength at 75%, faded to clear at the bottom.
+    mask.colors = @[(id)[UIColor colorWithWhite:0.0 alpha:1.0].CGColor,
+                    (id)[UIColor colorWithWhite:0.0 alpha:1.0].CGColor,
+                    (id)[UIColor colorWithWhite:0.0 alpha:0.55].CGColor,
+                    (id)[UIColor colorWithWhite:0.0 alpha:0.0].CGColor];
+    mask.locations = @[@0.0, @0.40, @0.75, @1.0];
+    mask.frame = blur.bounds;
+
+    // Strip the material's built-in darkening so the blur is colorless and the tint reads as a real
+    // translucent color (also lightens the whole effect).
+    Class subCls = NSClassFromString(@"_UIVisualEffectSubview");
+    for (UIView *sub in blur.subviews)
+        if ([sub isKindOfClass:subCls]) sub.backgroundColor = [UIColor clearColor];
+
+    // Inherit the nav bar tint — per-contact if set, else global; nil (plain frosted) if unset.
+    NSString *tintKey = isDarkMode() ? @"navBarTintColorDark" : @"navBarTintColor";
+    UIColor *tint = colorFromHex(effectiveValueForKey(tintKey));
+    UIView *overlay = [blur.contentView viewWithTag:4421];
+    if (tint) {
+        if (!overlay) {
+            overlay = [[UIView alloc] init];
+            overlay.tag = 4421;
+            overlay.userInteractionEnabled = NO;
+            overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [blur.contentView addSubview:overlay];
+        }
+        overlay.frame = blur.contentView.bounds;
+        overlay.backgroundColor = tint;
+    } else if (overlay) {
+        [overlay removeFromSuperview];
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled()) return;
+    [self setNeedsLayout];
 }
 
 %end
@@ -11660,12 +13531,343 @@ static char kWAMPickerBlursKey;
 
 %end
 
+static UIView *wamMakePlatterContainer(NSInteger tag) {
+    UIView *c = [[UIView alloc] init];
+    c.tag = tag;
+    c.userInteractionEnabled = NO;
+    c.clipsToBounds = NO;
+    c.layer.shadowColor = [UIColor blackColor].CGColor;
+    c.layer.shadowOpacity = 0.26;
+    c.layer.shadowRadius = 3.5;
+    c.layer.shadowOffset = CGSizeMake(0.0, 1.0);
+    UIVisualEffectView *fxv = [[UIVisualEffectView alloc] initWithEffect:
+        [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular]];
+    fxv.userInteractionEnabled = NO;
+    fxv.clipsToBounds = YES;
+    [c addSubview:fxv];
+    return c;
+}
+
+static UIView *wamFindPlatterContainer(UIView *host, NSInteger tag) {
+    for (UIView *s in host.subviews)
+        if (s.tag == tag && s.subviews.count &&
+            [s.subviews.firstObject isKindOfClass:[UIVisualEffectView class]])
+            return s;
+    return nil;
+}
+
+static void wamLayoutPlatterContainer(UIView *container, CGRect frame, CGFloat cornerRadius, BOOL globalColor,
+                                       NSString *lgPrefix, const void *lgKey, BOOL wantNavSnapshot) {
+    static const NSInteger kWAMPlatterTintTag = 4402;
+    container.frame = frame;
+
+    // Un-clip every ancestor up to the nav bar so the platter's drop shadow isn't cut off. Also force
+    // shouldRasterize off: _UIButtonBarButton (and toolbar buttons generally) commonly get rasterized by
+    // UIKit for perf, which bakes the view into a static bitmap — any live backdrop/blur nested inside then
+    // can't sample live content at all and just shows whatever was behind it at bake time, unblurred. That
+    // reads exactly as "acts like the blur isn't even there."
+    for (UIView *a = container.superview; a; a = a.superview) {
+        a.clipsToBounds = NO;
+        a.layer.shouldRasterize = NO;
+        if ([a isKindOfClass:%c(CKAvatarNavigationBar)] || [a isKindOfClass:[UINavigationBar class]]) break;
+    }
+
+    UIVisualEffectView *fxv = (UIVisualEffectView *)container.subviews.firstObject;
+    fxv.frame = container.bounds;
+    fxv.layer.cornerRadius = cornerRadius;
+    if (@available(iOS 13.0, *)) fxv.layer.cornerCurve = kCACornerCurveContinuous;
+    container.layer.shadowPath =
+        [UIBezierPath bezierPathWithRoundedRect:container.bounds cornerRadius:cornerRadius].CGPath;
+
+    // Strip the material's built-in tint so the blur is colorless — then a user color reads as a real
+    // translucent tint (not solid) while the plain blur still shows through.
+    Class subCls = NSClassFromString(@"_UIVisualEffectSubview");
+    for (UIView *sub in fxv.subviews)
+        if ([sub isKindOfClass:subCls]) sub.backgroundColor = [UIColor clearColor];
+
+    // Platter Color tints the stock blur (fxv) — once Liquid (Gl)ass glass is active, tinting happens inside
+    // the glass's own layer instead (see wamApplyLiquidAssGlass), so this stays scoped to non-glass mode to
+    // avoid painting both at once.
+    UIView *tintOverlay = nil;
+    for (UIView *s in fxv.contentView.subviews)
+        if (s.tag == kWAMPlatterTintTag) { tintOverlay = s; break; }
+    UIColor *tint = wamShouldUseLiquidAssGlass() ? nil : getNavPlatterColor(globalColor);
+    if (tint) {
+        if (!tintOverlay) {
+            tintOverlay = [[UIView alloc] init];
+            tintOverlay.tag = kWAMPlatterTintTag;
+            tintOverlay.userInteractionEnabled = NO;
+            [fxv.contentView addSubview:tintOverlay];
+        }
+        tintOverlay.frame = fxv.contentView.bounds;
+        tintOverlay.backgroundColor = tint;
+    } else if (tintOverlay) {
+        [tintOverlay removeFromSuperview];
+    }
+
+    // Liquid (Gl)ass compatibility (beta): purely additive, exactly like the search platter (which works) —
+    // fxv/tint above are left completely untouched, and glass is added as an extra layer behind them. Each
+    // caller passes its own dedicated key, mirroring search's own kWAMLiquidAssSearchKey, rather than sharing
+    // one key across every platter type.
+    wamApplyLiquidAssGlass(container, fxv, cornerRadius, lgKey, lgPrefix);
+    // Conv-list only (Edit/Compose) — chat's back/call/name already look right without it.
+    if (wantNavSnapshot) {
+        wamUpdateNavSnapshot(container, cornerRadius);
+    } else {
+        UIView *staleSnap = objc_getAssociatedObject(container, &kWAMNavSnapshotKey);
+        if (staleSnap) [staleSnap removeFromSuperview];
+    }
+}
+
+static void wamApplyNavButtonPlatter(UIView *host) {
+    static const NSInteger kWAMNavPlatterTag = 4400;
+    UIView *platter = wamFindPlatterContainer(host, kWAMNavPlatterTag);
+
+    // The conversation-list Edit button (a _UIButtonBarButton) reads the global value; the chat back and
+    // call buttons honor any per-contact override.
+    BOOL blurOn = [host isKindOfClass:%c(_UIButtonBarButton)] ? isNavButtonBlurEnabledGlobal()
+                                                              : isNavButtonBlurEnabled();
+    BOOL enabled = isTweakEnabled() && isModernNavBarEnabled() && blurOn;
+    BOOL isBack = [host isKindOfClass:%c(CKCanvasBackButtonView)];
+
+    // Clear any prior content inset (back button only) so glyph positions measure true, not shifted.
+    if (isBack) {
+        for (UIView *sub in host.subviews)
+            if (sub != platter) sub.transform = CGAffineTransformIdentity;
+    }
+
+    // Union of the visible glyphs (icon image + any badge label) in host coords, plus a count: one
+    // glyph → a clean circle centered on it; two or more (chevron + unread badge, or name + chevron)
+    // → a pill fitted to the pair.
+    CGRect content = CGRectNull;   // union of all glyphs
+    CGRect anchor = CGRectNull;    // the primary (leftmost) glyph — chevron / call icon
+    BOOL anchorIsLabel = NO;       // primary glyph is text (→ pill) vs an icon (→ circle)
+    NSInteger glyphCount = 0;
+    if (enabled) {
+        NSMutableArray *queue = [NSMutableArray arrayWithArray:host.subviews];
+        while (queue.count) {
+            UIView *v = queue.firstObject; [queue removeObjectAtIndex:0];
+            if (v == platter || v.tag == kWAMNavSnapshotTag) continue;
+            BOOL visible = !v.hidden && v.alpha > 0.05;
+            BOOL isGlyph = ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) ||
+                           ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length);
+            if (visible && isGlyph && v.bounds.size.width > 0 && v.bounds.size.height > 0) {
+                CGRect r = [v convertRect:v.bounds toView:host];
+                content = CGRectIsNull(content) ? r : CGRectUnion(content, r);
+                if (CGRectIsNull(anchor) || r.origin.x < anchor.origin.x) {
+                    anchor = r;
+                    anchorIsLabel = [v isKindOfClass:[UILabel class]];
+                }
+                glyphCount++;
+            }
+            [queue addObjectsFromArray:v.subviews];
+        }
+    }
+
+    if (!enabled || CGRectIsNull(content)) {
+        [platter removeFromSuperview];
+        return;
+    }
+
+    CGRect frame;
+    if (glyphCount <= 1 && anchorIsLabel) {
+        // Single text glyph (e.g. the "Edit" button) → a pill wrapping the text, kept the same height as
+        // the sibling circle button (same MAX(44, …) rule) so the two platters match.
+        CGFloat h = MAX(44.0, anchor.size.height + 14.0);
+        CGFloat w = content.size.width + 28.0;
+        frame = CGRectMake(CGRectGetMidX(content) - w / 2.0, CGRectGetMidY(content) - h / 2.0, w, h);
+    } else {
+        // Base circle centred on the primary glyph (chevron / call / compose icon). With an unread
+        // badge, extend the circle rightward into a pill so the chevron keeps the exact position it has
+        // with no badge — only the right side grows to wrap the badge.
+        CGFloat side = MAX(44.0, MAX(anchor.size.width, anchor.size.height) + 14.0);
+        frame = CGRectMake(CGRectGetMidX(anchor) - side / 2.0,
+                           CGRectGetMidY(anchor) - side / 2.0, side, side);
+        if (glyphCount >= 2) {
+            if (isBack) {
+                CGFloat right = CGRectGetMaxX(content) + 12.0;
+                if (right > CGRectGetMaxX(frame)) frame.size.width = right - CGRectGetMinX(frame);
+                frame = CGRectInset(frame, 0.0, -0.65);   // a touch taller than the circle, matching FaceTime
+            } else {
+                // Contact-name row (name + "›"): a symmetric pill wrapping both.
+                frame = CGRectInset(content, -13.0, -6.0);
+            }
+        }
+    }
+
+    // The back "‹" glyph sits right of its imageview centre; nudge its platter to sit centred on it.
+    if (isBack) frame.origin.x += 2.0;
+
+    // In the unread (pill) state the chevron+badge read a hair right of centre; nudge just the content
+    // left so it sits centred in the (fixed) platter — the platter's left edge and size are unchanged.
+    if (isBack && glyphCount >= 2) {
+        for (UIView *sub in host.subviews)
+            if (sub != platter) sub.transform = CGAffineTransformMakeTranslation(-3.0, 0.0);
+    }
+
+    if (!platter) {
+        platter = wamMakePlatterContainer(kWAMNavPlatterTag);
+        [host insertSubview:platter atIndex:0];
+    }
+    BOOL isConvListButton = [host isKindOfClass:%c(_UIButtonBarButton)];
+    static char kWAMLiquidAssConvButtonKey;
+    static char kWAMLiquidAssChatButtonKey;
+    wamLayoutPlatterContainer(platter, frame, frame.size.height / 2.0,
+                              isConvListButton,   // Edit = global color
+                              isConvListButton ? kWAMLGPrefixSearchPill : kWAMLGPrefixButton,
+                              isConvListButton ? &kWAMLiquidAssConvButtonKey : &kWAMLiquidAssChatButtonKey,
+                              isConvListButton);
+}
+
+static char kWAMNameFontKey;
+
+static void wamApplyNameShadow(UIView *canvas, CGRect platterFrameInCanvas, BOOL enabled) {
+    static const NSInteger kWAMNameShadowTag = 4403;
+    UIView *navbar = canvas;
+    while (navbar && ![navbar isKindOfClass:%c(CKAvatarNavigationBar)]) navbar = navbar.superview;
+    UIView *host = navbar ? navbar.superview : nil;
+    UIView *shadow = host ? [host viewWithTag:kWAMNameShadowTag] : nil;
+
+    if (!enabled || !host || CGRectIsEmpty(platterFrameInCanvas)) {
+        [shadow removeFromSuperview];
+        return;
+    }
+    if (!shadow) {
+        shadow = [[UIView alloc] init];
+        shadow.tag = kWAMNameShadowTag;
+        shadow.userInteractionEnabled = NO;
+        shadow.backgroundColor = [UIColor clearColor];
+        shadow.layer.shadowColor = [UIColor blackColor].CGColor;
+        shadow.layer.shadowOpacity = 0.26;
+        shadow.layer.shadowRadius = 3.5;
+        shadow.layer.shadowOffset = CGSizeMake(0.0, 1.5);
+    }
+    NSUInteger navIdx = [host.subviews indexOfObject:navbar];
+    NSUInteger shIdx = [host.subviews indexOfObject:shadow];
+    if (shIdx == NSNotFound || shIdx > navIdx) [host insertSubview:shadow belowSubview:navbar];
+    gWAMNameShadow = shadow;
+    if (!gWAMChatLeaving) shadow.alpha = 1.0;   // reset if reused after a fade — but not mid-leave, or it'd undo the fade
+    shadow.frame = [canvas convertRect:platterFrameInCanvas toView:host];
+    shadow.layer.shadowPath =
+        [UIBezierPath bezierPathWithRoundedRect:shadow.bounds cornerRadius:shadow.bounds.size.height / 2.0].CGPath;
+}
+
+static void wamApplyNamePlatter(UIView *nameView) {
+    static const NSInteger kWAMNamePlatterTag = 4401;
+
+    UIView *collectionView = nameView.superview;
+    UIView *canvas = collectionView;
+    while (canvas && ![canvas isKindOfClass:%c(CKNavigationBarCanvasView)]) canvas = canvas.superview;
+
+    UIView *platter = canvas ? wamFindPlatterContainer(canvas, kWAMNamePlatterTag) : nil;
+
+    // In the landscape split the chat nav bar is compact and shows the stock centred name — the name
+    // platter + its shadow have no room and look wrong, so tear them down and leave the name stock.
+    BOOL enabled = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled() && !wamIsLandscape();
+
+    BOOL on = enabled && canvas;
+
+    // Skip transitional/degenerate geometry: rotation collapses the canvas toward ~0 width mid-animation,
+    // and centering the name against that produced negative-x platters/shadows that landed in the
+    // back-button area. Leave the last-good layout until the canvas settles to a real width.
+    if (on && canvas.bounds.size.width < 200.0) return;
+
+    // The name label, the "›" chevron, and an optional shared-location subtitle under the name.
+    UILabel *label = nil; UIImageView *chev = nil; UILabel *subtitle = nil;
+    for (UIView *v in nameView.subviews) {
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length) {
+            UILabel *l = (UILabel *)v;
+            if (!label) label = l;
+            else if (!subtitle) {   // two text lines → the higher is the name, the lower is the location
+                if (l.frame.origin.y < label.frame.origin.y) { subtitle = label; label = l; }
+                else subtitle = l;
+            }
+        }
+        else if (!chev && [v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) chev = (UIImageView *)v;
+    }
+
+    // Enlarge via a bigger font (crisp — a transform makes the row re-truncate to "Gr…") plus a scaled
+    // chevron, laid out as a group centred where the original sat. Reset both when the feature is off.
+    CGRect content = CGRectNull;
+    if (label) {
+        UIFont *orig = objc_getAssociatedObject(label, &kWAMNameFontKey);
+        if (!orig) { orig = label.font; objc_setAssociatedObject(label, &kWAMNameFontKey, orig, OBJC_ASSOCIATION_RETAIN_NONATOMIC); }
+        if (on) {
+            CGFloat gcx = (CGRectGetMinX(label.frame) +
+                           (chev ? CGRectGetMaxX(chev.frame) : CGRectGetMaxX(label.frame))) / 2.0;
+            CGFloat gcy = label.center.y;
+
+            label.transform = CGAffineTransformIdentity;
+            label.font = [orig fontWithSize:orig.pointSize * 1.2];
+            CGSize fit = [label sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+            CGFloat lW = ceil(fit.width), lH = ceil(fit.height);
+
+            CGFloat chevScale = 1.4, gap = 3.0;
+            CGFloat chW = chev ? chev.bounds.size.width * chevScale : 0.0;
+            CGFloat totalW = lW + (chev ? gap + chW : 0.0);
+            CGFloat x = gcx - totalW / 2.0;
+
+            label.frame = CGRectMake(x, gcy - lH / 2.0, lW, lH);
+            content = [label convertRect:label.bounds toView:nameView];
+            if (chev) {
+                chev.transform = CGAffineTransformMakeScale(chevScale, chevScale);
+                chev.center = CGPointMake(x + lW + gap + chW / 2.0, gcy);
+                content = CGRectUnion(content, [chev convertRect:chev.bounds toView:nameView]);
+            }
+            // Grow to fit the shared-location subtitle (unchanged in size), keeping the same padding.
+            if (subtitle)
+                content = CGRectUnion(content, [subtitle convertRect:subtitle.bounds toView:nameView]);
+        } else {
+            label.font = orig;
+            label.transform = CGAffineTransformIdentity;
+            if (chev) chev.transform = CGAffineTransformIdentity;
+        }
+    }
+
+    if (!on || CGRectIsNull(content)) {
+        [platter removeFromSuperview];
+        wamApplyNameShadow(canvas, CGRectZero, NO);
+        return;
+    }
+
+    // Wider, and taller upward: the top rides up behind the avatar while the text stays in the lower
+    // part of the platter, like iOS 26.
+    CGFloat padX = 13.0, padTop = 9.0, padBottom = subtitle ? 11.0 : 7.0;
+    CGRect pill = CGRectMake(content.origin.x - padX, content.origin.y - padTop,
+                             content.size.width + padX * 2.0,
+                             content.size.height + padTop + padBottom);
+    CGRect frame = [nameView convertRect:pill toView:canvas];
+
+    if (!platter) platter = wamMakePlatterContainer(kWAMNamePlatterTag);
+    // Sit just behind the (transparent) title collection view, so it's behind the name text.
+    NSUInteger idx = [canvas.subviews indexOfObject:collectionView];
+    if (idx == NSNotFound) idx = 0;
+    if (platter.superview == canvas && [canvas.subviews indexOfObject:platter] < idx) idx--;
+    [canvas insertSubview:platter atIndex:idx];
+    static char kWAMLiquidAssNamePlateKey;
+    wamLayoutPlatterContainer(platter, frame, frame.size.height / 2.0, NO, kWAMLGPrefixButton,
+                              &kWAMLiquidAssNamePlateKey, NO);   // chat name — per-contact
+
+    // The blur container's own drop shadow is cut at the nav bar edge — disable it and render the
+    // name's shadow via a separate, unbounded view behind the nav bar instead. Skip it entirely when Liquid
+    // (Gl)ass is active — a drop shadow sitting on top of the glass reads as messy/muddy rather than lifted.
+    platter.layer.shadowOpacity = 0.0;
+    wamApplyNameShadow(canvas, frame, !wamShouldUseLiquidAssGlass());
+}
+
 %hook CKCanvasBackButtonView
 
 - (void)layoutSubviews {
     %orig;
     if (!isTweakEnabled()) return;
+    wamApplyNavButtonPlatter(self);
     [self applyCanvasBackButtonStyle];
+}
+
+- (void)setFrame:(CGRect)frame {
+    if (isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled())
+        frame.origin.x += 15.0;
+    %orig(frame);
 }
 
 - (void)didMoveToWindow {
@@ -11689,6 +13891,8 @@ static char kWAMPickerBlursKey;
 %new
 - (void)handleCanvasBackButtonPrefsChanged {
     refreshPrefs();
+    [self.superview setNeedsLayout];   // re-run setFrame with the new toggle state
+    wamApplyNavButtonPlatter(self);
     [self applyCanvasBackButtonStyle];
 }
 
@@ -11959,12 +14163,43 @@ static char kWAMPickerBlursKey;
         }
     }
     [self wamApplyNavCanvasButtonTint:self];
+    [self wamApplyComposeChromeTheme];
 }
 
 - (void) layoutSubviews {
     %orig;
+    // Let the platter drop shadows spill past the canvas bounds instead of being clipped.
+    self.clipsToBounds = !(isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled());
     if (!isTweakEnabled()) return;
     [self wamApplyNavCanvasButtonTint:self];
+    [self wamApplyComposeChromeTheme];
+}
+
+// MessagesViewService (the sharesheet compose host) has no nav bar / title-control system at all — its
+// "New Message"/"New iMessage"/"New MMS" title and its Cancel button are just a plain UILabel and UIButton
+// sitting directly on this canvas (confirmed via device diagnostics), so none of the main app's title/nav-
+// button hooks (_UINavigationBarTitleControl, the BackButton/CallButton-class-name walk above) ever see
+// them. Scoped to extension processes only — the main app already has its own dedicated, working mechanisms
+// for these, and this shouldn't touch that.
+%new
+- (void)wamApplyComposeChromeTheme {
+    if (!isTweakEnabled() || !wamIsNotificationExtension()) return;
+    UIColor *titleColor = getChatContactNameColor();
+    UIColor *buttonColor = getAdvancedTintColorForView(@"advancedNavButtonColor", @"advancedNavButtonColorDark", nil, self)
+        ?: getSystemTintColor();
+    for (UIView *sub in self.subviews) {
+        if ([sub isKindOfClass:[UILabel class]] && ((UILabel *)sub).text.length) {
+            if (titleColor) ((UILabel *)sub).textColor = titleColor;
+        } else if ([sub isKindOfClass:[UIButton class]] && buttonColor) {
+            ((UIButton *)sub).tintColor = buttonColor;
+        }
+    }
+}
+
+// Catch every attempt to re-enable clipping (e.g. during a push transition) so the shadows always spill.
+- (void)setClipsToBounds:(BOOL)clipsToBounds {
+    if (isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled()) clipsToBounds = NO;
+    %orig(clipsToBounds);
 }
 
 %new
@@ -12010,6 +14245,277 @@ static char kWAMPickerBlursKey;
         }
         for (UIView *sub in v.subviews) [queue addObject:sub];
     }
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
+}
+
+%end
+
+// The name platter can extend below the nav content bounds (tall for a two-line name + location). The
+// canvas already stops clipping, but its ancestor _UINavigationBarContentView clips too and cuts the
+// platter's bottom edge. Let it spill while the platter feature is on.
+%hook _UINavigationBarContentView
+
+- (void)layoutSubviews {
+    %orig;
+    BOOL noClip = isTweakEnabled() && isModernNavBarEnabled() &&
+                  (isNavButtonBlurEnabled() || isNavButtonBlurEnabledGlobal());
+    ((UIView *)self).clipsToBounds = !noClip;
+}
+
+- (void)setClipsToBounds:(BOOL)clipsToBounds {
+    if (isTweakEnabled() && isModernNavBarEnabled() &&
+        (isNavButtonBlurEnabled() || isNavButtonBlurEnabledGlobal())) clipsToBounds = NO;
+    %orig(clipsToBounds);
+}
+
+%end
+
+%hook CKNavBarUnifiedCallButton
+
+// Move the call button down in the landscape split by adjusting the frame UIKit SETS (which sticks), not a
+// transform (which UIKit re-lays-out and either absorbs or drives into a feedback loop — measured both). The
+// platter and glyph are subviews, so they move with the button and the platter stays full-size. This is the
+// same setFrame-nudge the back button already uses. +10 lands the glyph centre on ~32, level with Edit/Compose.
+- (void)setFrame:(CGRect)frame {
+    if (isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled() && wamIsLandscape())
+        frame.origin.y += 10.0;
+    %orig(frame);
+}
+
+%new
+- (void)wamApplyCallButtonDrop {
+    // Positioning is done in -setFrame:. Here just clear any stale transform a prior build may have left on
+    // the button or its glyph, so it doesn't compound with the frame nudge.
+    ((UIView *)self).transform = CGAffineTransformIdentity;
+    NSMutableArray *q = [NSMutableArray arrayWithArray:((UIView *)self).subviews];
+    while (q.count) {
+        UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+        if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) { v.transform = CGAffineTransformIdentity; break; }
+        [q addObjectsFromArray:v.subviews];
+    }
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!isTweakEnabled()) return;
+    [self wamApplyCallButtonDrop];
+    wamApplyNavButtonPlatter((UIView *)self);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (!isTweakEnabled() || ![(UIView *)self window]) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        return;
+    }
+    [self wamApplyCallButtonDrop];
+    wamApplyNavButtonPlatter((UIView *)self);
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(wamCallBtnPrefsChanged)
+        name:kPrefsChangedNotification object:nil];
+}
+
+%new
+- (void)wamCallBtnPrefsChanged {
+    refreshPrefs();
+    [self wamApplyCallButtonDrop];
+    wamApplyNavButtonPlatter((UIView *)self);
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    %orig;
+}
+
+%end
+
+%hook CNVisualIdentityAvatarContainerView
+
+- (void)layoutSubviews {
+    %orig;
+    // Off in the landscape split (compact bar shows the stock avatar with no room for a drop shadow).
+    BOOL on = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabled() && !wamIsLandscape();
+    // The avatar lives in a cell in the title collection view, in front of the name platter (which sits
+    // behind that collection view). So render its shadow as a separate view at the back of the canvas,
+    // where the name platter overlaps it — keeping the shadow behind the platter and its text. Find the
+    // canvas UNCONDITIONALLY (even when off) so a stale shadow from a prior on-state can still be removed.
+    UIView *canvas = nil;
+    for (UIView *a = self.superview; a; a = a.superview)
+        if ([a isKindOfClass:%c(CKNavigationBarCanvasView)]) { canvas = a; break; }
+
+    static const NSInteger kWAMAvatarShadowTag = 4405;
+    UIView *shadow = canvas ? [canvas viewWithTag:kWAMAvatarShadowTag] : nil;
+    self.layer.shadowOpacity = 0.0;
+
+    if (!on || !canvas || !self.subviews.count) {
+        [shadow removeFromSuperview];
+        return;
+    }
+    // Skip transitional/degenerate geometry (rotation collapses the canvas mid-animation → far-left shadow).
+    if (canvas.bounds.size.width < 200.0) return;
+    if (!shadow) {
+        shadow = [[UIView alloc] init];
+        shadow.tag = kWAMAvatarShadowTag;
+        shadow.userInteractionEnabled = NO;
+        shadow.backgroundColor = [UIColor clearColor];
+        shadow.layer.shadowColor = [UIColor blackColor].CGColor;
+        shadow.layer.shadowOpacity = 0.26;
+        // Downward-only (offset >= radius) so there's nothing above the image to cut or darken.
+        shadow.layer.shadowRadius = 3.0;
+        shadow.layer.shadowOffset = CGSizeMake(0.0, 3.5);
+    }
+    [canvas insertSubview:shadow atIndex:0];   // behind the name platter + collection view
+    UIView *img = self.subviews.firstObject;
+    shadow.frame = [self convertRect:(img ? img.frame : self.bounds) toView:canvas];
+    shadow.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:shadow.bounds].CGPath;
+}
+
+%end
+
+static BOOL wamIsConvListNavButton(UIResponder *btn) {
+    UIResponder *r = btn.nextResponder;
+    for (int i = 0; r && i < 15; i++) {
+        if ([r isKindOfClass:[UINavigationController class]])
+            return [((UINavigationController *)r).topViewController
+                       isKindOfClass:%c(CKConversationListCollectionViewController)];
+        r = r.nextResponder;
+    }
+    return NO;
+}
+
+// Compose is an image-configuration button that drops its glyph if you transform it or insert subviews
+// into it. So platter it non-invasively: a separate blur view sitting BEHIND the button in the button
+// bar, and shift the glyph by transforming the wrapper (_UIButtonBarButton), not the config button.
+static void wamApplyComposePlatter(UIView *bv) {
+    static const NSInteger kComposePlatterTag = 4413;
+    UIView *superv = bv.superview;
+    UIView *platter = nil;
+    if (superv)
+        for (UIView *s in superv.subviews)
+            if (s.tag == kComposePlatterTag) { platter = s; break; }
+
+    BOOL on = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal();
+    UIView *content = nil;
+    for (UIView *s in bv.subviews)
+        if ([s isKindOfClass:%c(_UIModernBarButton)]) { content = s; break; }
+    UIImageView *glyph = nil;
+    if (content) {
+        NSMutableArray *q = [NSMutableArray arrayWithArray:content.subviews];
+        while (q.count) {
+            UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+            if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) { glyph = (UIImageView *)v; break; }
+            [q addObjectsFromArray:v.subviews];
+        }
+    }
+
+    if (!on || !superv || !glyph || !bv.window || bv.hidden) {
+        bv.transform = CGAffineTransformIdentity;
+        [platter removeFromSuperview];
+        return;
+    }
+
+    // Shift the glyph inward + down (inline with Edit) by moving the wrapper button. The −8 x makes the
+    // platter's gap from the right screen edge match the chat call/FaceTime button's platter. In landscape
+    // the down-shift matches Edit/FaceTime (see wamNavButtonDropY).
+    bv.transform = CGAffineTransformMakeTranslation(-8.0, wamNavButtonDropY(YES));
+
+    // Frosted platter behind the button, a circle around the glyph's now-shifted position.
+    CGRect g = [glyph convertRect:glyph.bounds toView:superv];
+    CGFloat side = MAX(44.0, MAX(g.size.width, g.size.height) + 14.0);
+    CGRect frame = CGRectMake(CGRectGetMidX(g) - side / 2.0, CGRectGetMidY(g) - side / 2.0, side, side);
+    if (!platter) platter = wamMakePlatterContainer(kComposePlatterTag);
+    [superv insertSubview:platter belowSubview:bv];
+    static char kWAMLiquidAssComposeKey;
+    wamLayoutPlatterContainer(platter, frame, frame.size.height / 2.0, YES, kWAMLGPrefixSearchPill,
+                              &kWAMLiquidAssComposeKey, YES);
+}
+
+// Edit vs Compose by CONTENT, not position: Edit has a text label; Compose is image-only. Position is
+// unreliable mid-transition, and misdetecting Compose as Edit applies Edit's content transform, which
+// drops Compose's image-config glyph.
+static UIView *wamModernBarContent(UIView *bv) {
+    for (UIView *s in bv.subviews)
+        if ([s isKindOfClass:%c(_UIModernBarButton)]) return s;
+    return nil;
+}
+static BOOL wamIsEditListButton(UIView *bv) {
+    UIView *content = wamModernBarContent(bv);
+    if (!content) return NO;
+    NSMutableArray *q = [NSMutableArray arrayWithArray:content.subviews];
+    while (q.count) {
+        UIView *v = q.firstObject; [q removeObjectAtIndex:0];
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length > 0) return YES;
+        [q addObjectsFromArray:v.subviews];
+    }
+    return NO;
+}
+
+// Dispatch a conversation-list nav button: Edit uses the in-button platter; Compose uses the safe
+// behind-the-button platter.
+static void wamStyleListButton(UIView *bv) {
+    if (wamIsEditListButton(bv)) {
+        UIView *content = wamModernBarContent(bv);
+        BOOL on = isTweakEnabled() && isModernNavBarEnabled() && isNavButtonBlurEnabledGlobal();
+        if (on && content && bv.window) {
+            bv.clipsToBounds = NO;
+            content.clipsToBounds = NO;
+            // Portrait nudges the Edit content +16 right for spacing from the screen edge. In the narrow
+            // landscape split column the safe-area inset already provides that gap, and +16 shoves "Edit"
+            // into the centred title — so don't shift it horizontally there. Drop it lower in landscape so
+            // it lines up with Compose/FaceTime (see wamNavButtonDropY).
+            content.transform = CGAffineTransformMakeTranslation(wamIsLandscape() ? 0.0 : 16.0,
+                                                                 wamNavButtonDropY(YES));
+        } else if (content) {
+            content.transform = CGAffineTransformIdentity;
+        }
+        wamApplyNavButtonPlatter(bv);   // self-manages add/remove by the toggle
+        if (content) [bv bringSubviewToFront:content];
+    } else {
+        wamApplyComposePlatter(bv);
+    }
+}
+
+%hook _UIButtonBarButton
+
+- (void)layoutSubviews {
+    %orig;
+    UIView *bv = (UIView *)self;
+    if (!isTweakEnabled() || !wamIsConvListNavButton((UIResponder *)bv)) return;
+
+    wamStyleListButton(bv);
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (![(UIView *)self window]) {
+        // Leaving the window (e.g. pushing a chat): drop our wrapper transform and separate platter so
+        // the Compose config button re-renders its glyph cleanly when it comes back.
+        UIView *bv = (UIView *)self;
+        bv.transform = CGAffineTransformIdentity;
+        if (bv.superview)
+            for (UIView *s in [bv.superview.subviews copy])
+                if (s.tag == 4413) [s removeFromSuperview];   // kComposePlatterTag
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+        return;
+    }
+    if (isTweakEnabled() && wamIsConvListNavButton((UIResponder *)self))
+        wamStyleListButton((UIView *)self);
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(wamListBtnPrefsChanged)
+        name:kPrefsChangedNotification object:nil];
+}
+
+%new
+- (void)wamListBtnPrefsChanged {
+    refreshPrefs();
+    if (wamIsConvListNavButton((UIResponder *)self))
+        wamStyleListButton((UIView *)self);
 }
 
 - (void)dealloc {
@@ -12183,6 +14689,7 @@ static char kWAMPickerBlursKey;
 
 - (void)didMoveToWindow {
     %orig;
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
     if (!isTweakEnabled() || !isiOS17OrHigher() || !self.window) return;
 
     UIView *parent = self.superview;
@@ -12201,6 +14708,44 @@ static char kWAMPickerBlursKey;
     if (!isNoConversationView) return;
 
     [self applyWrapperBackground];
+    // This is the VISIBLE iOS 17 chat background. Observe prefs changes so a per-contact preset applied
+    // in-chat refreshes it live — otherwise it only updates on re-entry (didMoveToWindow/Superview).
+    [[NSNotificationCenter defaultCenter] addObserver:self
+        selector:@selector(wamHandleWrapperPrefsChanged)
+        name:kPrefsChangedNotification object:nil];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:kPrefsChangedNotification object:nil];
+    %orig;
+}
+
+%new
+- (void)wamHandleWrapperPrefsChanged {
+    if (!isTweakEnabled() || !isiOS17OrHigher() || !self.window) return;
+    refreshPrefs();
+    // Force a fresh rebuild: drop the existing wrapper bg so applyWrapperBackground recreates it (an
+    // in-place .image swap doesn't reliably re-display, and preset images are copied with an unchanged
+    // mtime so nothing else signals "reload").
+    UIView *contentView = nil;
+    for (UIView *subview in self.subviews)
+        if ([subview isKindOfClass:[UIView class]] && ![subview isKindOfClass:[UIImageView class]]) { contentView = subview; break; }
+    UIView *bgHost = (contentView && [contentView isKindOfClass:[UIScrollView class]]) ? self : (contentView ?: self);
+    [[bgHost viewWithTag:kWrapperBackgroundImageTag] removeFromSuperview];
+    [self applyWrapperBackground];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    %orig;
+    if (!isTweakEnabled() || !isiOS17OrHigher()) return;
+    if (@available(iOS 13.0, *)) {
+        // On a light/dark switch the per-contact background has a different image for the new mode; the
+        // wrapper doesn't otherwise get told, so rebuild it here (previously required leaving the chat).
+        if ([self.traitCollection hasDifferentColorAppearanceComparedToTraitCollection:previousTraitCollection]) {
+            if ([self respondsToSelector:@selector(wamHandleWrapperPrefsChanged)])
+                [self performSelector:@selector(wamHandleWrapperPrefsChanged)];
+        }
+    }
 }
 
 - (void)didMoveToSuperview {

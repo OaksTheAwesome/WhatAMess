@@ -15,7 +15,28 @@
         if (!baseKey) continue;
         spec.properties[@"key"] = [self keyForBase:baseKey];
     }
+    [self applySearchBgLock];
     return _specifiers;
+}
+
+// The frosted button platters relocate the search bar to a bottom platter, so the stock search-field
+// background must stay hidden while they're on. Force "Hide Search Background" ON and grey it out.
+- (void)applySearchBgLock {
+    BOOL platters = [[self readPrefs][[self keyForBase:@"isNavButtonBlurEnabled"]] boolValue]
+                 && [[self readPrefs][[self keyForBase:@"isModernNavBarEnabled"]] boolValue];
+    for (PSSpecifier *spec in _specifiers) {
+        if (![spec.properties[@"key"] isEqualToString:@"isSearchBgEnabled"]) continue;
+        [spec setProperty:@(!platters) forKey:@"enabled"];
+        if (platters && ![[self readPrefs][@"isSearchBgEnabled"] boolValue]) {
+            [self saveValue:@YES forKey:@"isSearchBgEnabled"];
+            [self postNotification];
+        }
+    }
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self reloadSpecifiers];   // refresh the search-bg lock in case platters were toggled elsewhere
 }
 
 #pragma mark - Color Pickers

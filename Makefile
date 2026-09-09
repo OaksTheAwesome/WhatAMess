@@ -1,4 +1,6 @@
-TARGET = iphone:clang:latest:15.0
+# Pin the SDK to theos's bundled 16.5 (which ships private-framework stubs). `latest` now resolves to the
+# Xcode 26 public SDK, which has no PrivateFrameworks, so linking Preferences (prefs bundle) fails.
+TARGET = iphone:clang:16.5:15.0
 FINALPACKAGE = 1
 INSTALL_TARGET_PROCESSES = com.apple.MobileSMS
 

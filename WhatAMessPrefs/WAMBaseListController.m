@@ -78,7 +78,8 @@ NSString *WAMJBPath(NSString *suffix) {
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     NSSet *globalKeys = [NSSet setWithArray:@[
         @"isCellBlurTintEnabled",
-        @"isAdvancedTintEnabled"
+        @"isAdvancedTintEnabled",
+        @"isLiquidAssCompatEnabled"
     ]];
 
     NSString *lightKey = specifier.properties[@"lightModeKey"];
@@ -108,7 +109,8 @@ NSString *WAMJBPath(NSString *suffix) {
 - (id)readPreferenceValue:(PSSpecifier *)specifier {
     NSSet *globalKeys = [NSSet setWithArray:@[
         @"isCellBlurTintEnabled",
-        @"isAdvancedTintEnabled"
+        @"isAdvancedTintEnabled",
+        @"isLiquidAssCompatEnabled"
     ]];
 
     NSString *lightKey = specifier.properties[@"lightModeKey"];

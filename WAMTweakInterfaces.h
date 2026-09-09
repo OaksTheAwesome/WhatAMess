@@ -5,6 +5,7 @@
 -(void)handlePrefsChanged;
 -(void)updateAllColors;
 -(void)applyCustomNavTitle;
+-(void)wamSetupBottomSearch;
 @end
 
 @interface CKChatController : UIViewController
@@ -343,10 +344,23 @@
 @interface CNContactHeaderDisplayView : UIView
 @end
 
+@interface CNContactHeaderStaticDisplayView : UIView
+@end
+
+@interface CKEntryViewPlusButton : UIView
+- (void)wamThemePlusButton;
+@end
+
+@interface CNContactHeaderCollapsedView : UIView
+@end
+
 @interface CNContactActionsContainerView : UIView
 @end
 
 @interface CKMessageAcknowledgmentPickerBarItemViewPhone : UIView
+@end
+
+@interface CNVisualIdentityAvatarContainerView : UIView
 @end
 
 @interface CKCanvasBackButtonView : UIView
@@ -384,6 +398,7 @@
 @interface CKNavigationBarCanvasView : UIView
 - (void)wamApplyNavCanvasButtonTint:(UIView *)view;
 - (void)wamHandleNavCanvasPrefsChanged;
+- (void)wamApplyComposeChromeTheme;
 @end
 
 @interface CKPhotosSearchResultsModeHeaderReusableView : UIView
@@ -406,4 +421,8 @@
 @end
 
 @interface CKConversationListEmbeddedStandardTableViewCell
+@end
+
+@interface CKNavBarUnifiedCallButton : UIView
+- (void)wamApplyCallButtonDrop;
 @end

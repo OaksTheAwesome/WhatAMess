@@ -3,7 +3,7 @@
 # WhatAMess
 **A simple Messages customization tweak for today's jailbreaks.**
 
-_Designed with iOS 16 in mind, supported on iOS 15 and tested on NathanLR on iOS 17._
+_Designed with iOS 16 in mind, supported on iOS 15 and iOS 17._
 
 ## Description
 
@@ -16,9 +16,11 @@ For far too long has the Messages app on modern jailbreaks been boring! With Wha
 - Change App-Wide Tint Color
 - Modern NavBar: A navigation bar that blurs content closer to the top of the screen. (Inspired by Messages on iOS 26. Togglable)
 - NavBar Tinting
+- Button Platters (inspired by iOS 26)
 - Cell Tinting (with optional overrides)
 - Dark/Light Mode Customization
 - Preset Browsing, Saving, Importing/Exporting
+- Experimental Liquid (Gl)ass support
 
 ### Conversation List View
 - Custom Gradient Background
@@ -67,7 +69,6 @@ Please keep in mind this is my _first tweak_ and I'm still getting familiar with
 - Some text such as "2 Replies" may switch back to the system tint color occasionally on iOS 17.
 - "Notify Anyway" text shown after sending a message to another user in DND mode may revert back to system color when leaving and reopening window.
 - Link Bubbles in Pinned Message Previews sometimes break, displaying a square instead of a bubble.
-- Contact "Info" view on iOS 17 is slightly broken.
 
 ## Features I'd Like to Add
 - Custom Large Title

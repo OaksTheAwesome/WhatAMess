@@ -19,7 +19,7 @@
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    [self reloadSpecifiers];   // re-check LiquidAss installed-ness each time this page is shown
+    [self reloadSpecifiers];
 }
 
 #pragma mark - Liquid (Gl)ass Compatibility (Beta)

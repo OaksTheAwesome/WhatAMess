@@ -12,10 +12,6 @@
     return _specifiers;
 }
 
-// The button platters require Modern NavBar, so grey out their toggle when Modern NavBar is off (in the
-// current editing mode) — mirrors the search-background lock on the Conversation List page. Bottom Screen
-// Blur has no meaning without the platters (it dresses up the platter's own bottom search bar), so it's
-// locked to the platter toggle the same way.
 - (void)applyPlatterLock {
     NSDictionary *prefs = [self readPrefs];
     BOOL modern = [prefs[[self keyForBase:@"isModernNavBarEnabled"]] boolValue];
@@ -34,7 +30,7 @@
     [super setPreferenceValue:value specifier:specifier];
     NSString *key = specifier.properties[@"lightModeKey"];
     if ([key isEqualToString:@"isModernNavBarEnabled"] || [key isEqualToString:@"isNavButtonBlurEnabled"])
-        [self reloadSpecifiers];   // re-grey the platter / bottom-blur toggles immediately
+        [self reloadSpecifiers];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
